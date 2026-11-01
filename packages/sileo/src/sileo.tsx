@@ -1,6 +1,7 @@
-import { motion } from "motion/react";
+import { motion, useReducedMotion } from "motion/react";
 import {
   type CSSProperties,
+  type KeyboardEvent,
   type MouseEventHandler,
   memo,
   type ReactNode,
@@ -36,6 +37,7 @@ interface View {
   icon?: ReactNode | null;
   styles?: SileoStyles;
   button?: SileoButton;
+  buttons?: readonly SileoButton[];
   fill: string;
 }
 
@@ -51,6 +53,10 @@ interface SileoProps {
   icon?: ReactNode | null;
   styles?: SileoStyles;
   button?: SileoButton;
+  buttons?: readonly SileoButton[];
+  stateLabel?: string;
+  dismissLabel?: string;
+  expandLabel?: string;
   roundness?: number;
   exiting?: boolean;
   autoExpandDelayMs?: number;
@@ -58,9 +64,11 @@ interface SileoProps {
   canExpand?: boolean;
   interruptKey?: string;
   refreshKey?: string;
-  onMouseEnter?: MouseEventHandler<HTMLButtonElement>;
-  onMouseLeave?: MouseEventHandler<HTMLButtonElement>;
+  onMouseEnter?: MouseEventHandler<HTMLElement>;
+  onMouseLeave?: MouseEventHandler<HTMLElement>;
   onDismiss?: () => void;
+  /* the toast leaves while it holds the focus: the Toaster moves it on */
+  onFocusLeave?: (id: string) => void;
 }
 
 /* ---------------------------------- Icons --------------------------------- */
@@ -126,6 +134,10 @@ export const Sileo = memo(function Sileo({
   icon,
   styles,
   button,
+  buttons,
+  stateLabel,
+  dismissLabel,
+  expandLabel,
   roundness,
   exiting = false,
   autoExpandDelayMs,
@@ -136,11 +148,14 @@ export const Sileo = memo(function Sileo({
   onMouseEnter,
   onMouseLeave,
   onDismiss,
+  onFocusLeave,
 }: SileoProps) {
   const next: View = useMemo(
-    () => ({ title, description, state, icon, styles, button, fill }),
-    [title, description, state, icon, styles, button, fill],
+    () => ({ title, description, state, icon, styles, button, buttons, fill }),
+    [title, description, state, icon, styles, button, buttons, fill],
   );
+  /* reduced motion (the user's setting): no spring, no shape morph, no gooey filter; CSS transitions are cut in styles.css */
+  const reduced = useReducedMotion() ?? false;
 
   const [view, setView] = useState<View>(next);
   const [applied, setApplied] = useState(refreshKey);
@@ -148,9 +163,19 @@ export const Sileo = memo(function Sileo({
   const [ready, setReady] = useState(false);
   const [pillWidth, setPillWidth] = useState(0);
   const [contentHeight, setContentHeight] = useState(0);
-  const hasDesc = Boolean(view.description) || Boolean(view.button);
+  /* working with the toast: pointer or focus inside; an explicit open/close of the disclosure wins while it lasts */
+  const [hovered, setHovered] = useState(false);
+  const [focusInside, setFocusInside] = useState(false);
+  const [userOpen, setUserOpen] = useState<boolean | null>(null);
+  const interacting = hovered || focusInside;
+  const actions = useMemo(
+    () => [...(view.button ? [view.button] : []), ...(view.buttons ?? [])],
+    [view.button, view.buttons],
+  );
+  const hasDesc = Boolean(view.description) || actions.length > 0;
   const isLoading = view.state === "loading";
-  const open = hasDesc && isExpanded && !isLoading;
+  const open = hasDesc && !isLoading && (userOpen ?? (isExpanded || focusInside));
+  const contentId = `sileo-content-${id}`;
   const allowExpand = isLoading ? false : (canExpand ?? (!interruptKey || interruptKey === id));
 
   const headerKey = `${view.state}-${view.title}`;
@@ -158,7 +183,7 @@ export const Sileo = memo(function Sileo({
   const resolvedRoundness = Math.max(0, roundness ?? DEFAULT_ROUNDNESS);
   const blur = resolvedRoundness * BLUR_RATIO;
 
-  const headerRef = useRef<HTMLDivElement>(null);
+  const headerRef = useRef<HTMLElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const headerExitRef = useRef<number | null>(null);
   const autoExpandRef = useRef<number | null>(null);
@@ -306,7 +331,11 @@ export const Sileo = memo(function Sileo({
       return;
     }
 
-    if (lastRefreshKeyRef.current === refreshKey) return;
+    /* the same instance changed (sileo.update): take the content as it is, no collapse, no swap */
+    if (lastRefreshKeyRef.current === refreshKey) {
+      if (!pendingRef.current) setView((prev) => (prev === next ? prev : next));
+      return;
+    }
     lastRefreshKeyRef.current = refreshKey;
 
     if (swapTimerRef.current) {
@@ -314,7 +343,8 @@ export const Sileo = memo(function Sileo({
       swapTimerRef.current = null;
     }
 
-    if (open) {
+    /* a new instance swaps with the original collapse-then-change – never while someone works with the toast */
+    if (open && !interacting) {
       pendingRef.current = { key: refreshKey, payload: next };
       setIsExpanded(false);
       swapTimerRef.current = window.setTimeout(() => {
@@ -330,7 +360,7 @@ export const Sileo = memo(function Sileo({
       setView(next);
       setApplied(refreshKey);
     }
-  }, [open, refreshKey, next]);
+  }, [open, interacting, refreshKey, next]);
 
   /* ----------------------------- Auto expand/collapse ----------------------- */
 
@@ -358,7 +388,9 @@ export const Sileo = memo(function Sileo({
     }
 
     if (collapseDelay > 0) {
-      autoCollapseRef.current = window.setTimeout(() => setIsExpanded(false), collapseDelay);
+      autoCollapseRef.current = window.setTimeout(() => {
+        if (!interactingRef.current) setIsExpanded(false);
+      }, collapseDelay);
     }
 
     return () => {
@@ -366,6 +398,14 @@ export const Sileo = memo(function Sileo({
       if (autoCollapseRef.current) clearTimeout(autoCollapseRef.current);
     };
   }, [autoCollapseDelayMs, autoExpandDelayMs, hasDesc, allowExpand, exiting, applied]);
+
+  const interactingRef = useRef(interacting);
+  interactingRef.current = interacting;
+
+  /* the disclosure's explicit choice lasts while the toast is in use */
+  useEffect(() => {
+    if (!interacting) setUserOpen(null);
+  }, [interacting]);
 
   /* ------------------------------ Derived values ---------------------------- */
 
@@ -409,9 +449,12 @@ export const Sileo = memo(function Sileo({
     [open, expandedContent],
   );
 
-  const bodyTransition = useMemo(() => (open ? SPRING : { ...SPRING, bounce: 0 }), [open]);
+  const bodyTransition = useMemo(
+    () => (reduced ? { duration: 0 } : open ? SPRING : { ...SPRING, bounce: 0 }),
+    [open, reduced],
+  );
 
-  const pillTransition = useMemo(() => (ready ? SPRING : { duration: 0 }), [ready]);
+  const pillTransition = useMemo(() => (ready && !reduced ? SPRING : { duration: 0 }), [ready, reduced]);
 
   const viewBox = `0 0 ${WIDTH} ${svgHeight}`;
 
@@ -430,23 +473,25 @@ export const Sileo = memo(function Sileo({
 
   /* -------------------------------- Handlers -------------------------------- */
 
-  const handleEnter: MouseEventHandler<HTMLButtonElement> = useCallback(
+  const handleEnter: MouseEventHandler<HTMLElement> = useCallback(
     (e) => {
       onMouseEnter?.(e);
+      setHovered(true);
       if (hasDesc) setIsExpanded(true);
     },
     [hasDesc, onMouseEnter],
   );
 
-  const handleLeave: MouseEventHandler<HTMLButtonElement> = useCallback(
+  const handleLeave: MouseEventHandler<HTMLElement> = useCallback(
     (e) => {
       onMouseLeave?.(e);
+      setHovered(false);
       setIsExpanded(false);
     },
     [onMouseLeave],
   );
 
-  const handleTransitionEnd: TransitionEventHandler<HTMLButtonElement> = useCallback(
+  const handleTransitionEnd: TransitionEventHandler<HTMLElement> = useCallback(
     (e) => {
       if (e.propertyName !== "height" && e.propertyName !== "transform") return;
       if (open) return;
@@ -463,11 +508,37 @@ export const Sileo = memo(function Sileo({
     [open],
   );
 
+  /* the disclosure: opens or closes the description and actions (keyboard, tap); the choice lasts while it is in use */
+  const handleToggle = useCallback(() => {
+    if (open) {
+      setUserOpen(false);
+      setIsExpanded(false);
+    } else {
+      setUserOpen(true);
+    }
+  }, [open]);
+
+  /* Escape closes the open card from inside this toast only, never a key someone else (a dialog, a menu) handled */
+  const handleKeyDown = useCallback(
+    (e: KeyboardEvent<HTMLElement>) => {
+      if (e.key !== "Escape" || !open || e.defaultPrevented) return;
+      if (!(e.target instanceof Node) || !e.currentTarget.contains(e.target)) return;
+      e.preventDefault();
+      /* the card becomes inert: a focus inside it goes to the disclosure first */
+      if (contentRef.current?.contains(document.activeElement)) headerRef.current?.focus();
+      setUserOpen(false);
+      setIsExpanded(false);
+    },
+    [open],
+  );
+
   /* -------------------------------- Swipe ----------------------------------- */
 
   const SWIPE_DISMISS = 30;
   const SWIPE_MAX = 20;
-  const buttonRef = useRef<HTMLButtonElement>(null);
+  /* movement before the pointer is captured, so a tap on the disclosure stays a click */
+  const SWIPE_CAPTURE = 4;
+  const buttonRef = useRef<HTMLDivElement>(null);
   const pointerStartRef = useRef<number | null>(null);
   const onDismissRef = useRef(onDismiss);
   onDismissRef.current = onDismiss;
@@ -483,6 +554,9 @@ export const Sileo = memo(function Sileo({
         const el = buttonRef.current;
         if (pointerStartRef.current === null || !el) return;
         const dy = e.clientY - pointerStartRef.current;
+        if (Math.abs(dy) > SWIPE_CAPTURE && !el.hasPointerCapture(e.pointerId)) {
+          el.setPointerCapture(e.pointerId);
+        }
         const sign = dy > 0 ? 1 : -1;
         const clamped = Math.min(Math.abs(dy), SWIPE_MAX) * sign;
         el.style.transform = `translateY(${clamped}px)`;
@@ -503,22 +577,12 @@ export const Sileo = memo(function Sileo({
     swipeHandlersRef.current = handlers;
   }
 
-  const handleButtonClick = useCallback(
-    (e: React.MouseEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-      view.button?.onClick();
-    },
-    [view.button],
-  );
-
   const handlePointerDown = useCallback(
-    (e: React.PointerEvent<HTMLButtonElement>) => {
+    (e: React.PointerEvent<HTMLDivElement>) => {
       if (exiting || !onDismiss) return;
       const target = e.target as HTMLElement;
-      if (target.closest("[data-sileo-button]")) return;
+      if (target.closest("[data-sileo-button], [data-sileo-close]")) return;
       pointerStartRef.current = e.clientY;
-      e.currentTarget.setPointerCapture(e.pointerId);
       const el = buttonRef.current;
       const h = swipeHandlersRef.current;
       if (el && h) {
@@ -529,31 +593,105 @@ export const Sileo = memo(function Sileo({
     [exiting, onDismiss],
   );
 
+  /* a toast that leaves while it holds the focus hands it on before it becomes inert */
+  useLayoutEffect(() => {
+    if (!exiting) return;
+    const active = document.activeElement;
+    if (active instanceof Node && buttonRef.current?.contains(active)) onFocusLeave?.(id);
+  }, [exiting, id, onFocusLeave]);
+
   /* --------------------------------- Render --------------------------------- */
 
+  const headerContent = (
+    <>
+      <div data-sileo-header-stack>
+        <div
+          ref={innerRef}
+          key={headerLayer.current.key}
+          data-sileo-header-inner
+          data-layer="current"
+        >
+          <div
+            data-sileo-badge
+            data-state={headerLayer.current.view.state}
+            className={headerLayer.current.view.styles?.badge}
+            aria-hidden="true"
+          >
+            {headerLayer.current.view.icon ?? STATE_ICON[headerLayer.current.view.state]}
+          </div>
+          <span
+            data-sileo-title
+            data-state={headerLayer.current.view.state}
+            className={headerLayer.current.view.styles?.title}
+          >
+            {headerLayer.current.view.title}
+          </span>
+        </div>
+        {headerLayer.prev && (
+          <div
+            key={headerLayer.prev.key}
+            data-sileo-header-inner
+            data-layer="prev"
+            data-exiting="true"
+            aria-hidden="true"
+          >
+            <div
+              data-sileo-badge
+              data-state={headerLayer.prev.view.state}
+              className={headerLayer.prev.view.styles?.badge}
+            >
+              {headerLayer.prev.view.icon ?? STATE_ICON[headerLayer.prev.view.state]}
+            </div>
+            <span
+              data-sileo-title
+              data-state={headerLayer.prev.view.state}
+              className={headerLayer.prev.view.styles?.title}
+            >
+              {headerLayer.prev.view.title}
+            </span>
+          </div>
+        )}
+      </div>
+      {/* read after the title, outside the measured pill so its width stays the original */}
+      {stateLabel ? <span data-sileo-sr>, {stateLabel}</span> : null}
+      {hasDesc && expandLabel ? <span data-sileo-sr>, {expandLabel}</span> : null}
+    </>
+  );
+
   return (
-    <button
+    <div
       ref={buttonRef}
-      type="button"
+      role="group"
+      aria-label={view.title}
       data-sileo-toast
+      data-id={id}
       data-ready={ready}
       data-expanded={open}
       data-exiting={exiting}
       data-edge={expand}
       data-position={position}
       data-state={view.state}
+      data-reduced-motion={reduced || undefined}
+      inert={exiting || undefined}
       className={className}
       style={rootStyle}
       onMouseEnter={handleEnter}
       onMouseLeave={handleLeave}
+      onFocus={() => setFocusInside(true)}
+      onBlur={(e) => {
+        if (e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) return;
+        setFocusInside(false);
+      }}
+      onKeyDown={handleKeyDown}
       onTransitionEnd={handleTransitionEnd}
       onPointerDown={handlePointerDown}
     >
-      <div data-sileo-canvas data-edge={expand}>
-        <svg data-sileo-svg width={WIDTH} height={svgHeight} viewBox={viewBox}>
-          <title>sileo notification</title>
-          <GooeyDefs filterId={filterId} blur={blur} width={WIDTH} height={svgHeight} />
-          <g filter={`url(#${filterId})`}>
+      <div data-sileo-canvas data-edge={expand} aria-hidden="true">
+        <svg data-sileo-svg width={WIDTH} height={svgHeight} viewBox={viewBox} aria-hidden="true" focusable="false">
+          {reduced ? null : (
+            <GooeyDefs filterId={filterId} blur={blur} width={WIDTH} height={svgHeight} />
+          )}
+          <g filter={reduced ? undefined : `url(#${filterId})`}>
             <motion.rect
               data-sileo-pill
               rx={resolvedRoundness}
@@ -578,75 +716,73 @@ export const Sileo = memo(function Sileo({
         </svg>
       </div>
 
-      <div ref={headerRef} data-sileo-header data-edge={expand}>
-        <div data-sileo-header-stack>
-          <div
-            ref={innerRef}
-            key={headerLayer.current.key}
-            data-sileo-header-inner
-            data-layer="current"
-          >
-            <div
-              data-sileo-badge
-              data-state={headerLayer.current.view.state}
-              className={headerLayer.current.view.styles?.badge}
-            >
-              {headerLayer.current.view.icon ?? STATE_ICON[headerLayer.current.view.state]}
-            </div>
-            <span
-              data-sileo-title
-              data-state={headerLayer.current.view.state}
-              className={headerLayer.current.view.styles?.title}
-            >
-              {headerLayer.current.view.title}
-            </span>
-          </div>
-          {headerLayer.prev && (
-            <div
-              key={headerLayer.prev.key}
-              data-sileo-header-inner
-              data-layer="prev"
-              data-exiting="true"
-            >
-              <div
-                data-sileo-badge
-                data-state={headerLayer.prev.view.state}
-                className={headerLayer.prev.view.styles?.badge}
-              >
-                {headerLayer.prev.view.icon ?? STATE_ICON[headerLayer.prev.view.state]}
-              </div>
-              <span
-                data-sileo-title
-                data-state={headerLayer.prev.view.state}
-                className={headerLayer.prev.view.styles?.title}
-              >
-                {headerLayer.prev.view.title}
-              </span>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {hasDesc && (
-        <div data-sileo-content data-edge={expand} data-visible={open}>
-          <div ref={contentRef} data-sileo-description className={view.styles?.description}>
-            {view.description}
-            {view.button && (
-              // biome-ignore lint/a11y/useValidAnchor: cannot use button inside a button
-              <a
-                href="#"
-                type="button"
-                data-sileo-button
-                data-state={view.state}
-                className={view.styles?.button}
-                onClick={handleButtonClick}
-              >
-                {view.button.title}
-              </a>
-            )}
-          </div>
+      {hasDesc ? (
+        <button
+          ref={headerRef as React.RefObject<HTMLButtonElement>}
+          type="button"
+          data-sileo-header
+          data-edge={expand}
+          aria-expanded={open}
+          aria-controls={contentId}
+          onClick={handleToggle}
+        >
+          {headerContent}
+        </button>
+      ) : (
+        <div ref={headerRef as React.RefObject<HTMLDivElement>} data-sileo-header data-edge={expand}>
+          {headerContent}
         </div>
       )}
-    </button>
+
+      {hasDesc && (
+        <div
+          id={contentId}
+          data-sileo-content
+          data-edge={expand}
+          data-visible={open}
+          inert={!open || undefined}
+        >
+          <div ref={contentRef} data-sileo-description className={view.styles?.description}>
+            {view.description}
+            {actions.length > 0 && (
+              <div data-sileo-actions>
+                {actions.map((action, index) => (
+                  <button
+                    // the actions of one state keep their order; their titles may repeat
+                    // biome-ignore lint/suspicious/noArrayIndexKey: position is the identity here
+                    key={index}
+                    type="button"
+                    data-sileo-button
+                    data-state={view.state}
+                    className={view.styles?.button}
+                    disabled={action.disabled || action.busy}
+                    aria-busy={action.busy || undefined}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      action.onClick();
+                    }}
+                  >
+                    {action.title}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          {dismissLabel && onDismiss ? (
+            <button
+              type="button"
+              data-sileo-close
+              aria-label={dismissLabel}
+              onClick={(e) => {
+                e.stopPropagation();
+                onDismiss();
+              }}
+            >
+              <X />
+            </button>
+          ) : null}
+        </div>
+      )}
+    </div>
   );
 });

@@ -1,0 +1,11 @@
+@one-serve/sileo – OneServe fork of Sileo
+
+Upstream:   https://github.com/hiaaryan/sileo (package "sileo", by Aaryan, GitHub hiaaryan)
+Fork:       https://github.com/GerritHillebrecht/sileo
+Based on:   tag v0.1.6 (commit fea6820), source identical to the published npm package sileo@0.1.6
+
+License: MIT, as declared in the upstream package.json ("license": "MIT").
+The upstream repository contains no LICENSE file and no copyright line. This fork does not invent one; the full
+license text and copyright holder are to be clarified with upstream before any public publication of this package.
+
+Changes of the fork are listed in README.md ("OneServe fork").
