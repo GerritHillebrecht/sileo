@@ -55,6 +55,8 @@ Additions and changes, with their reasons:
   request only. The viewport's own `aria-live` is gone, so nothing is read twice.
 - **Motion:** `motion` is a peer dependency, `^14.7.1` (the version this fork is tested with). With reduced motion no
   spring, shape morph or gooey filter runs; the CSS transitions are cut as before.
+- **Toasts that stay:** a toast with `duration: null` opens once by itself and closes back to its pill like a timed
+  one (0.1.6 never opened it), so an error or a waiting decision is seen; `autopilot: false` turns it off.
 - **Stack:** `visibleToasts` limits the toasts per position (the one in use stays shown), the rest behind a "more"
   button (`moreLabel`, `lessLabel`); `label` names the region. Safe-area padding at the screen edges.
 - **Looks:** shapes, filter, colours, type and timing are the original; added controls use the original button style.

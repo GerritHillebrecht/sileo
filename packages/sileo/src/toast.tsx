@@ -131,9 +131,10 @@ const resolveAutopilot = (
   opts: InternalSileoOptions,
   duration: number | null,
 ): { expandDelayMs?: number; collapseDelayMs?: number } => {
-  if (opts.autopilot === false || !duration || duration <= 0) return {};
+  if (opts.autopilot === false || (duration !== null && duration <= 0)) return {};
   const cfg = typeof opts.autopilot === "object" ? opts.autopilot : undefined;
-  const clamp = (v: number) => Math.min(duration, Math.max(0, v));
+  /* a toast that stays (duration null) opens once as well, so an error or a waiting decision is seen; 0.1.6 never opened it */
+  const clamp = (v: number) => (duration === null ? Math.max(0, v) : Math.min(duration, Math.max(0, v)));
   return {
     expandDelayMs: clamp(cfg?.expand ?? AUTO_EXPAND_DELAY),
     collapseDelayMs: clamp(cfg?.collapse ?? AUTO_COLLAPSE_DELAY),

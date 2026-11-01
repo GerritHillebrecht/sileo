@@ -174,6 +174,16 @@ describe("lifetime and races", () => {
     expect(toastOf("unclear")?.dataset.exiting).toBe("false");
   });
 
+  it("a toast that stays opens once by itself and closes back to its pill, like a timed one", () => {
+    render(<Toaster />);
+    show({ id: "stays", title: "Zahlung ungeklärt", type: "warning", description: "Status prüfen", duration: null });
+    advance(300);
+    expect(toastOf("stays")?.dataset.expanded).toBe("true");
+    advance(5000);
+    expect(toastOf("stays")?.dataset.expanded).toBe("false");
+    expect(toastOf("stays")?.dataset.exiting).toBe("false");
+  });
+
   it("pauses while the focus is inside and goes on with the remaining time", () => {
     render(<Toaster />);
     show({ id: "focus", title: "Gespeichert", description: "Pizza", duration: 4000 });
