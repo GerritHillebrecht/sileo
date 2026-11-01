@@ -560,6 +560,16 @@ button[data-sileo-header]:focus-visible {
   }
 }
 
+/* reduced motion forced by a MotionConfig (the media query above covers the user's setting) */
+[data-sileo-toast][data-reduced-motion],
+[data-sileo-toast][data-reduced-motion] *,
+[data-sileo-toast][data-reduced-motion] *::before,
+[data-sileo-toast][data-reduced-motion] *::after {
+  animation-duration: 0.01ms;
+  animation-iteration-count: 1;
+  transition-duration: 0.01ms;
+}
+
 /* notches and home indicators */
 [data-sileo-viewport][data-position^="top"] {
   padding-top: max(0.75rem, env(safe-area-inset-top));

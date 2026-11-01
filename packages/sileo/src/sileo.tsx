@@ -1,4 +1,4 @@
-import { motion, useReducedMotion } from "motion/react";
+import { motion, useReducedMotion, useReducedMotionConfig } from "motion/react";
 import {
   type CSSProperties,
   type KeyboardEvent,
@@ -154,8 +154,10 @@ export const Sileo = memo(function Sileo({
     () => ({ title, description, state, icon, styles, button, buttons, fill }),
     [title, description, state, icon, styles, button, buttons, fill],
   );
-  /* reduced motion (the user's setting): no spring, no shape morph, no gooey filter; CSS transitions are cut in styles.css */
-  const reduced = useReducedMotion() ?? false;
+  /* reduced motion – the user's setting, or forced by a MotionConfig above (reducedMotion="always"): no spring, no shape
+     morph, no gooey filter; the CSS transitions are cut in styles.css (media query, and data-reduced-motion when forced) */
+  const userReduced = useReducedMotion() ?? false;
+  const reduced = useReducedMotionConfig() || userReduced;
 
   const [view, setView] = useState<View>(next);
   const [applied, setApplied] = useState(refreshKey);
