@@ -15,6 +15,8 @@ import {
 } from "react";
 import {
   BLUR_RATIO,
+  CLOSE_GAP,
+  CLOSE_SIZE,
   DEFAULT_ROUNDNESS,
   HEADER_EXIT_MS,
   HEIGHT,
@@ -85,6 +87,12 @@ const STATE_ICON: Record<State, ReactNode> = {
 };
 
 const REGION_SIGMA = 2;
+
+/* the header's natural width: what is cut off a title (ellipsis) counts, so the pill knows when it is too short */
+const naturalWidth = (inner: HTMLElement) => {
+  const title = inner.querySelector<HTMLElement>("[data-sileo-title]");
+  return inner.scrollWidth + (title ? Math.max(0, title.scrollWidth - title.clientWidth) : 0);
+};
 
 const GooeyDefs = memo(function GooeyDefs({
   filterId,
@@ -166,7 +174,10 @@ export const Sileo = memo(function Sileo({
   const [applied, setApplied] = useState(refreshKey);
   const [isExpanded, setIsExpanded] = useState(false);
   const [ready, setReady] = useState(false);
+  /* the pill's natural width (badge and the whole title) */
   const [pillWidth, setPillWidth] = useState(0);
+  /* the toast's rendered width: WIDTH, or less on a narrow screen (styles.css); SVG, filter and pill all use it */
+  const [width, setWidth] = useState(WIDTH);
   const [contentHeight, setContentHeight] = useState(0);
   /* working with the toast: pointer or focus inside; an explicit open/close of the disclosure wins while it lasts */
   const [hovered, setHovered] = useState(false);
@@ -177,7 +188,12 @@ export const Sileo = memo(function Sileo({
     () => [...(view.button ? [view.button] : []), ...(view.buttons ?? [])],
     [view.button, view.buttons],
   );
-  const hasDesc = Boolean(view.description) || actions.length > 0;
+  const hasClose = Boolean(dismissLabel && onDismiss);
+  const closeSpace = hasClose ? CLOSE_SIZE + CLOSE_GAP : 0;
+  /* the pill never grows past the toast (beside its close button); a longer title is cut and shown whole in the card */
+  const maxPillWidth = Math.max(HEIGHT, width - closeSpace);
+  const truncated = pillWidth > maxPillWidth;
+  const hasDesc = Boolean(view.description) || actions.length > 0 || truncated;
   const isLoading = view.state === "loading";
   const open = hasDesc && !isLoading && (userOpen ?? (isExpanded || focusInside));
   const contentId = `sileo-content-${id}`;
@@ -222,7 +238,7 @@ export const Sileo = memo(function Sileo({
     }
     const px = headerPadRef.current;
     const measure = () => {
-      const w = el.scrollWidth + px + PILL_PADDING;
+      const w = naturalWidth(el) + px + PILL_PADDING;
       if (w > PILL_PADDING) {
         setPillWidth((prev) => (prev === w ? prev : w));
       }
@@ -236,7 +252,7 @@ export const Sileo = memo(function Sileo({
           const inner = innerRef.current;
           const pad = headerPadRef.current ?? 0;
           if (!inner) return;
-          const w = inner.scrollWidth + pad + PILL_PADDING;
+          const w = naturalWidth(inner) + pad + PILL_PADDING;
           if (w > PILL_PADDING) {
             setPillWidth((prev) => (prev === w ? prev : w));
           }
@@ -287,6 +303,20 @@ export const Sileo = memo(function Sileo({
   useEffect(() => {
     const raf = requestAnimationFrame(() => setReady(true));
     return () => cancelAnimationFrame(raf);
+  }, []);
+
+  /* the layout width (offsetWidth: the entry's scale transform does not count) */
+  useLayoutEffect(() => {
+    const el = buttonRef.current;
+    if (!el) return;
+    const measure = () => {
+      const w = el.offsetWidth;
+      if (w > 0) setWidth((prev) => (prev === w ? prev : w));
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
   }, []);
 
   useLayoutEffect(() => {
@@ -430,15 +460,17 @@ export const Sileo = memo(function Sileo({
   const expanded = open ? rawExpanded : frozenExpandedRef.current;
   const svgHeight = hasDesc ? Math.max(expanded, minExpanded) : HEIGHT;
   const expandedContent = Math.max(0, expanded - HEIGHT);
-  const resolvedPillWidth = Math.max(pillWidth || HEIGHT, HEIGHT);
+  const resolvedPillWidth = Math.min(Math.max(pillWidth || HEIGHT, HEIGHT), maxPillWidth);
   const pillHeight = HEIGHT + blur * 3;
 
+  /* pill and close button sit together: centred as a pair, the button on the inner side of a right-aligned pill */
   const pillX =
     position === "right"
-      ? WIDTH - resolvedPillWidth
+      ? width - resolvedPillWidth
       : position === "center"
-        ? (WIDTH - resolvedPillWidth) / 2
+        ? (width - resolvedPillWidth - closeSpace) / 2
         : 0;
+  const closeX = position === "right" ? pillX - closeSpace : pillX + resolvedPillWidth + CLOSE_GAP;
 
   /* ------------------------------- Memoised animate targets ----------------- */
 
@@ -466,7 +498,7 @@ export const Sileo = memo(function Sileo({
 
   const pillTransition = useMemo(() => (ready && !reduced ? SPRING : { duration: 0 }), [ready, reduced]);
 
-  const viewBox = `0 0 ${WIDTH} ${svgHeight}`;
+  const viewBox = `0 0 ${width} ${svgHeight}`;
 
   /* ------------------------------- Inline styles ---------------------------- */
 
@@ -475,10 +507,12 @@ export const Sileo = memo(function Sileo({
       "--_h": `${open ? expanded : HEIGHT}px`,
       "--_pw": `${resolvedPillWidth}px`,
       "--_px": `${pillX}px`,
+      "--_cx": `${closeX}px`,
+      "--_fill": view.fill,
       "--_ht": `translateY(${open ? (expand === "bottom" ? 3 : -3) : 0}px) scale(${open ? 0.9 : 1})`,
       "--_co": `${open ? 1 : 0}`,
     }),
-    [open, expanded, resolvedPillWidth, pillX, expand],
+    [open, expanded, resolvedPillWidth, pillX, closeX, view.fill, expand],
   );
 
   /* -------------------------------- Handlers -------------------------------- */
@@ -552,7 +586,7 @@ export const Sileo = memo(function Sileo({
   /* movement before the pointer is captured, so a tap on the disclosure stays a click */
   const SWIPE_CAPTURE = 4;
   const buttonRef = useRef<HTMLDivElement>(null);
-  /* the card (description, actions, close button): inert while closed */
+  /* the card (description, actions): inert while closed */
   const cardRef = useRef<HTMLDivElement>(null);
   const pointerStartRef = useRef<number | null>(null);
   const onDismissRef = useRef(onDismiss);
@@ -715,9 +749,9 @@ export const Sileo = memo(function Sileo({
       onPointerDown={handlePointerDown}
     >
       <div data-sileo-canvas data-edge={expand} aria-hidden="true">
-        <svg data-sileo-svg width={WIDTH} height={svgHeight} viewBox={viewBox} aria-hidden="true" focusable="false">
+        <svg data-sileo-svg width={width} height={svgHeight} viewBox={viewBox} aria-hidden="true" focusable="false">
           {reduced ? null : (
-            <GooeyDefs filterId={filterId} blur={blur} width={WIDTH} height={svgHeight} />
+            <GooeyDefs filterId={filterId} blur={blur} width={width} height={svgHeight} />
           )}
           <g filter={reduced ? undefined : `url(#${filterId})`}>
             <motion.rect
@@ -732,7 +766,7 @@ export const Sileo = memo(function Sileo({
             <motion.rect
               data-sileo-body
               y={HEIGHT}
-              width={WIDTH}
+              width={width}
               rx={resolvedRoundness}
               ry={resolvedRoundness}
               fill={view.fill}
@@ -762,6 +796,25 @@ export const Sileo = memo(function Sileo({
         </div>
       )}
 
+      {/* its own control beside the pill, never inside the disclosure: also a toast without a card can be closed */}
+      {hasClose ? (
+        <button
+          type="button"
+          data-sileo-close
+          data-edge={expand}
+          aria-label={dismissLabel}
+          onClick={(e) => {
+            e.stopPropagation();
+            onDismiss?.();
+          }}
+        >
+          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M18 6 6 18" />
+            <path d="m6 6 12 12" />
+          </svg>
+        </button>
+      ) : null}
+
       {hasDesc && (
         <div
           ref={cardRef}
@@ -772,6 +825,12 @@ export const Sileo = memo(function Sileo({
           inert={!open || undefined}
         >
           <div ref={contentRef} data-sileo-description className={view.styles?.description}>
+            {/* a title cut in the pill, whole – screen readers have it whole in the header already */}
+            {truncated ? (
+              <p data-sileo-full-title aria-hidden="true">
+                {view.title}
+              </p>
+            ) : null}
             {view.description}
             {actions.length > 0 && (
               <div data-sileo-actions>
@@ -799,22 +858,6 @@ export const Sileo = memo(function Sileo({
               </div>
             )}
           </div>
-          {dismissLabel && onDismiss ? (
-            <button
-              type="button"
-              data-sileo-close
-              aria-label={dismissLabel}
-              onClick={(e) => {
-                e.stopPropagation();
-                onDismiss();
-              }}
-            >
-              <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M18 6 6 18" />
-                <path d="m6 6 12 12" />
-              </svg>
-            </button>
-          ) : null}
         </div>
       )}
     </div>

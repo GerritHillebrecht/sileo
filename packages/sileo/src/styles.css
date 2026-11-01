@@ -514,30 +514,68 @@ button[data-sileo-header]:focus-visible {
   cursor: not-allowed;
 }
 
+/* the close button beside the pill, in the pill's fill (--_fill), level with the header (CLOSE_SIZE, CLOSE_GAP) */
 [data-sileo-close] {
   position: absolute;
-  top: 0.5rem;
-  right: 0.5rem;
+  z-index: 20;
+  left: var(--_cx, 0px);
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 1.75rem;
-  height: 1.75rem;
+  width: 28px;
+  height: 28px;
   padding: 0;
   border: 0;
   border-radius: 9999px;
-  background: transparent;
+  background-color: var(--_fill, transparent);
   color: inherit;
   cursor: pointer;
-  transition: background-color 150ms ease;
+}
+
+[data-sileo-close][data-edge="bottom"] {
+  top: calc((var(--sileo-height) - 28px) / 2);
+}
+
+[data-sileo-close][data-edge="top"] {
+  bottom: calc((var(--sileo-height) - 28px) / 2);
+}
+
+[data-sileo-toast][data-ready="true"] [data-sileo-close] {
+  transition: left var(--sileo-duration) var(--sileo-spring-easing);
 }
 
 [data-sileo-close]:hover {
-  background-color: color-mix(in oklch, currentColor 15%, transparent);
+  background-color: color-mix(in oklch, var(--_fill, transparent) 85%, currentColor);
 }
 
-[data-sileo-content]:has([data-sileo-close]) [data-sileo-description] {
-  padding-right: 2.75rem;
+/* a title too long for the toast: cut in the pill, whole in the card */
+[data-sileo-header-stack],
+[data-sileo-header-inner][data-layer="current"] {
+  min-width: 0;
+  max-width: 100%;
+}
+
+[data-sileo-header-inner] [data-sileo-title] {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+[data-sileo-full-title] {
+  margin: 0 0 0.5rem;
+  overflow-wrap: anywhere;
+}
+
+/* narrower than the original width on a small screen: the toast, and with it SVG, filter and pill, take what there is */
+[data-sileo-toast] {
+  width: min(
+    var(--sileo-width),
+    calc(100vw - 1.5rem - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px))
+  );
+}
+
+[data-sileo-description] {
+  overflow-wrap: anywhere;
 }
 
 /* the toasts beyond the visible ones: at the far end of the stack */
@@ -561,11 +599,11 @@ button[data-sileo-header]:focus-visible {
     min-height: 2.25rem;
   }
 
-  [data-sileo-close] {
-    width: 2.25rem;
-    height: 2.25rem;
-    top: 0.25rem;
-    right: 0.25rem;
+  /* the visible button stays the pill's size; its target reaches 44 px */
+  [data-sileo-close]::after {
+    content: "";
+    position: absolute;
+    inset: -8px;
   }
 }
 

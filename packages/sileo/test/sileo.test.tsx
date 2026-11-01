@@ -223,6 +223,100 @@ describe("lifetime and races", () => {
     ]);
   });
 
+  it("setting a toast anew is no leaving: the current callback stays without a new one, a new one replaces it, the leaving reaches it once", () => {
+    render(<Toaster />);
+    const first = vi.fn();
+    const second = vi.fn();
+    show({ id: "r", title: "Läuft", type: "loading", onDismiss: first, duration: null });
+    // show() and update() without a callback: nothing is reported, the callback is kept
+    show({ id: "r", title: "Ungeklärt", type: "warning", duration: null });
+    act(() => {
+      sileo.update("r", { description: "Status prüfen" });
+    });
+    expect(first).not.toHaveBeenCalled();
+    act(() => {
+      sileo.dismiss("r");
+    });
+    expect(first.mock.calls).toEqual([["r", "programmatic"]]);
+
+    // a new callback replaces the old one; the old instance's timer no longer reaches anything
+    show({ id: "s", title: "Gespeichert", onDismiss: first, duration: 1000 });
+    show({ id: "s", title: "Fehler", type: "error", onDismiss: second, duration: null });
+    advance(2000);
+    expect(toastOf("s")?.dataset.exiting).toBe("false");
+    act(() => sileo.clear());
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second.mock.calls).toEqual([["s", "clear"]]);
+
+    // dismissed and set again at once: the leaving instance reported, the new one has its own callback and leaves once
+    const third = vi.fn();
+    show({ id: "t", title: "Alt", onDismiss: second, duration: null });
+    act(() => {
+      sileo.dismiss("t");
+    });
+    show({ id: "t", title: "Neu", onDismiss: third, duration: 1000 });
+    advance(1100);
+    expect(second.mock.calls.at(-1)).toEqual(["t", "programmatic"]);
+    expect(third.mock.calls).toEqual([["t", "timeout"]]);
+  });
+
+  it("dismiss with immediate removes a toast at once, without an exit phase, and reports it once", () => {
+    render(<Toaster />);
+    const onDismiss = vi.fn();
+    show({ id: "old", title: "Alter Standort", description: "Annehmen", buttons: [{ title: "Annehmen", onClick: () => {} }], onDismiss, duration: null });
+    act(() => {
+      sileo.dismiss("old", { immediate: true });
+    });
+    expect(toastOf("old")).toBeNull();
+    expect(onDismiss.mock.calls).toEqual([["old", "programmatic"]]);
+    // one already leaving goes at once as well, without a second report
+    show({ id: "fading", title: "Blendet aus", onDismiss, duration: null });
+    act(() => {
+      sileo.dismiss("fading");
+      sileo.dismiss("fading", { immediate: true });
+    });
+    expect(toastOf("fading")).toBeNull();
+    expect(onDismiss.mock.calls).toEqual([["old", "programmatic"], ["fading", "programmatic"]]);
+  });
+
+  it("reports holding by focus or mouse and its end, also when the held toast is removed meanwhile", () => {
+    render(<Toaster />);
+    const onHold = vi.fn();
+    show({ id: "h", title: "Gespeichert", description: "Pizza", onHold, duration: null });
+    const header = toastOf("h")!.querySelector<HTMLElement>("[data-sileo-header]")!;
+    act(() => header.focus());
+    expect(onHold.mock.calls).toEqual([["h", true]]);
+    act(() => header.blur());
+    expect(onHold.mock.calls).toEqual([["h", true], ["h", false]]);
+    fireEvent.pointerOver(toastOf("h")!, { pointerType: "mouse" });
+    expect(onHold.mock.calls.at(-1)).toEqual(["h", true]);
+    act(() => {
+      sileo.dismiss("h", { immediate: true });
+    });
+    expect(onHold.mock.calls.at(-1)).toEqual(["h", false]);
+  });
+
+  it("draws SVG, filter and card in the width the toast really has on a narrow screen", () => {
+    const offsetWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetWidth");
+    Object.defineProperty(HTMLElement.prototype, "offsetWidth", {
+      configurable: true,
+      get() {
+        return (this as HTMLElement).hasAttribute("data-sileo-toast") ? 296 : 0;
+      },
+    });
+    try {
+      render(<Toaster />);
+      show({ id: "n", title: "Schmal", description: "Text", duration: null });
+      const svg = toastOf("n")!.querySelector("svg[data-sileo-svg]")!;
+      expect(svg.getAttribute("width")).toBe("296");
+      expect(svg.getAttribute("viewBox")?.startsWith("0 0 296 ")).toBe(true);
+      expect(toastOf("n")!.querySelector("[data-sileo-body]")?.getAttribute("width")).toBe("296");
+      expect(toastOf("n")!.querySelector("filter")?.getAttribute("width")).toBe(String(296 + 16 * 0.5 * 2 * 2));
+    } finally {
+      if (offsetWidth) Object.defineProperty(HTMLElement.prototype, "offsetWidth", offsetWidth);
+    }
+  });
+
   it("unmounting a Toaster ends only its own timers; the toasts stay, keep their time after a StrictMode remount, and are not read again", () => {
     const first = render(<Toaster />);
     show({ id: "stay", title: "Bleibt", duration: null });
@@ -407,7 +501,7 @@ describe("controls", () => {
     expect(document.activeElement).toBe(header);
   });
 
-  it("Escape from the close button also hands the focus to the disclosure, never into the inert card", () => {
+  it("Escape from the close button closes the card; the button beside the pill keeps the focus (it never becomes inert)", () => {
     render(<Toaster />);
     show({ id: "c", title: "Hinweis", type: "info", description: "Text", dismissLabel: "Schließen", duration: null });
     const header = toastOf("c")!.querySelector<HTMLElement>("[data-sileo-header]")!;
@@ -416,8 +510,49 @@ describe("controls", () => {
     act(() => close.focus());
     fireEvent.keyDown(close, { key: "Escape" });
     expect(header.getAttribute("aria-expanded")).toBe("false");
-    expect(document.activeElement).toBe(header);
+    expect(document.activeElement).toBe(close);
+    expect(close.closest("[inert]")).toBeNull();
   });
+
+  // with and without a description, with and without actions, timed and persistent: always its own close button
+  const closeCases = [
+    { name: "title only, persistent", options: { duration: null } },
+    { name: "title only, timed", options: { duration: 4000 } },
+    { name: "with description", options: { description: "Text", duration: null } },
+    { name: "with actions", options: { buttons: [{ title: "Öffnen", onClick: () => {} }], duration: null } },
+    { name: "with description and actions", options: { description: "Text", buttons: [{ title: "Öffnen", onClick: () => {} }], duration: null } },
+  ] as const;
+  for (const { name, options } of closeCases) {
+    it(`can be closed by keyboard and tap, without a nested control and without opening a card (${name})`, () => {
+      render(
+        <>
+          <button type="button">Ausgang</button>
+          <Toaster />
+        </>,
+      );
+      const onDismiss = vi.fn();
+      show({ id: "x", title: "Zahlung ungeklärt", type: "warning", dismissLabel: "Meldung schließen", onDismiss, ...options });
+      const toast = toastOf("x")!;
+      const close = screen.getByRole("button", { name: "Meldung schließen" });
+      // beside the pill: neither inside the disclosure nor inside the (closed, inert) card
+      expect(close.closest("[data-sileo-header]")).toBeNull();
+      expect(close.closest("[data-sileo-content]")).toBeNull();
+      expect(close.closest("[inert]")).toBeNull();
+      for (const control of Array.from(toast.querySelectorAll("button"))) {
+        expect(control.querySelector("button, a, input, [tabindex]")).toBeNull();
+      }
+      // reached from outside by keyboard, closed with a click (Enter and a tap both click a button)
+      const origin = screen.getByRole("button", { name: "Ausgang" });
+      act(() => origin.focus());
+      fireEvent.focus(close, { relatedTarget: origin });
+      act(() => close.focus());
+      fireEvent.click(close);
+      expect(onDismiss.mock.calls).toEqual([["x", "user"]]);
+      expect(toast.dataset.exiting).toBe("true");
+      // the focus goes back where it came from, never to the page
+      expect(document.activeElement).toBe(origin);
+    });
+  }
 
   it("shows at most visibleToasts and keeps the rest reachable", () => {
     render(<Toaster visibleToasts={3} moreLabel={(n) => `${n} weitere`} lessLabel="Weniger" />);

@@ -127,6 +127,16 @@ const dismissToast = (id: string, reason: SileoDismissReason = "programmatic") =
   return true;
 };
 
+/* takes the toast out at once, without the exit phase (also one already leaving): nothing of it stays readable */
+const removeToast = (id: string, reason: SileoDismissReason) => {
+  const item = store.toasts.find((t) => t.id === id);
+  if (!item) return false;
+  store.update((prev) => prev.filter((t) => t.id !== id));
+  /* a leaving toast reported its reason when it started to leave */
+  if (!item.exiting) reportDismiss(item, reason);
+  return true;
+};
+
 const resolveAutopilot = (
   opts: InternalSileoOptions,
   duration: number | null,
@@ -166,10 +176,16 @@ const buildSileoItem = (
   };
 };
 
+/* setting a live toast anew is no leaving: without a callback of its own the next instance keeps the current one */
+const keepCallbacks = (merged: InternalSileoOptions, current: SileoItem | undefined): InternalSileoOptions =>
+  current
+    ? { ...merged, onDismiss: merged.onDismiss ?? current.onDismiss, onHold: merged.onHold ?? current.onHold }
+    : merged;
+
 const createToast = (options: InternalSileoOptions) => {
-  const merged = mergeOptions(options);
-  const id = merged.id ?? generateId();
+  const id = options.id ?? generateId();
   const prev = liveItem(id);
+  const merged = keepCallbacks(mergeOptions(options), prev);
   const item = buildSileoItem(merged, id, prev?.position);
 
   if (prev) {
@@ -186,7 +202,7 @@ const createToast = (options: InternalSileoOptions) => {
 const replaceToast = (id: string, options: InternalSileoOptions) => {
   const existing = liveItem(id);
   if (!existing) return false;
-  const item = buildSileoItem(mergeOptions(options), id, existing.position);
+  const item = buildSileoItem(keepCallbacks(mergeOptions(options), existing), id, existing.position);
   store.update((prev) => prev.map((t) => (t === existing ? item : t)));
   announce(options.announce === false ? false : (options.announce ?? options.title), options.urgency);
   return true;
@@ -276,7 +292,12 @@ export const sileo = {
     return p;
   },
 
-  dismiss: (id: string) => dismissToast(id, "programmatic"),
+  /**
+   * Lets the toast leave ("programmatic"). With `immediate` it is gone at once, without the exit phase – for a change of
+   * context (another user or location) where nothing of the old one may stay readable or operable while it fades.
+   */
+  dismiss: (id: string, options?: { immediate?: boolean }) =>
+    options?.immediate ? removeToast(id, "programmatic") : dismissToast(id, "programmatic"),
 
   /** Removes the toasts (of one position) at once; each reports "clear". The way to end everything, e.g. on sign-out. */
   clear: (position?: SileoPosition) => {
@@ -352,6 +373,30 @@ export function Toaster({
   const [hoveredId, setHoveredId] = useState<string>();
   const heldRef = useRef<{ focused?: string; hovered?: string }>({});
   heldRef.current = { focused: focusedId, hovered: hoveredId };
+  /* onHold: the callback is kept from the start of the hold, so the release reaches it also after the toast was removed */
+  const holdsRef = useRef(new Map<string, SileoItem["onHold"]>());
+  useEffect(() => {
+    const held = new Set([focusedId, hoveredId].filter((id): id is string => id !== undefined));
+    for (const [id, onHold] of holdsRef.current) {
+      if (held.has(id)) continue;
+      holdsRef.current.delete(id);
+      onHold?.(id, false);
+    }
+    for (const id of held) {
+      if (holdsRef.current.has(id)) continue;
+      const onHold = store.toasts.find((t) => t.id === id)?.onHold;
+      holdsRef.current.set(id, onHold);
+      onHold?.(id, true);
+    }
+  }, [focusedId, hoveredId]);
+  /* an unmounted Toaster holds nothing any more */
+  useEffect(() => {
+    const holds = holdsRef.current;
+    return () => {
+      for (const [id, onHold] of holds) onHold?.(id, false);
+      holds.clear();
+    };
+  }, []);
   const [showAll, setShowAll] = useState<ReadonlySet<SileoPosition>>(new Set());
 
   const pausedByPointer = useRef(false);

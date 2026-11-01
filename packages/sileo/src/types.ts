@@ -55,9 +55,14 @@ export interface SileoOptions {
   announce?: string | false;
   /** "assertive" only when someone has to react now; default "polite". */
   urgency?: "polite" | "assertive";
-  /** Called once when the toast leaves, with the reason. Leaving says nothing about the process it shows. */
+  /**
+   * Called once when the toast leaves, with the reason. Leaving says nothing about the process it shows. show() with the
+   * id of a live toast and update() are no leaving: they call nothing, and without a new callback the current one stays.
+   */
   onDismiss?: (id: string, reason: SileoDismissReason) => void;
-  /** Accessible name of the close button; without it the toast has none (it may still be swiped away). */
+  /** Called when someone starts (true) or stops (false) working with the toast: the focus or a mouse pointer on it. */
+  onHold?: (id: string, held: boolean) => void;
+  /** Accessible name of the close button beside the pill; without it the toast has none (it may still be swiped away). */
   dismissLabel?: string;
   /** Accessible name added to the disclosure that opens the description and actions, e.g. "Details". */
   expandLabel?: string;

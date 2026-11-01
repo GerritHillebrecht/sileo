@@ -43,12 +43,17 @@ Additions and changes, with their reasons:
 - **Lifetimes:** exit removal, timers and promise results act on their own instance only (0.1.6: a toast set again
   during the 600 ms exit was removed by the old timer, upstream issue #30; a late promise result overwrote a newer
   toast). Pointer or focus inside pauses the time, which then goes on with what was left. `onDismiss(id, reason)` with
-  `"user" | "timeout" | "programmatic" | "clear"`, once. Unmounting a `Toaster` ends its own timers only; `clear()` ends
-  the toasts.
+  `"user" | "timeout" | "programmatic" | "clear"`, once, to the callback of the instance that leaves. `show()` with a live
+  id and `update()` are no leaving: they call nothing, a callback they bring replaces the current one, and without one the
+  current one stays. `onHold(id, held)` reports when the focus or a mouse pointer starts and stops working with a toast
+  (also when it is removed meanwhile), for an app that runs the lifetime itself. `sileo.dismiss(id, { immediate: true })`
+  removes a toast at once, without the exit phase – for a change of user or location, where nothing old may stay readable
+  or operable while it fades. Unmounting a `Toaster` ends its own timers only; `clear()` ends the toasts.
 - **Controls:** the toast is a `group`, not a `button` with an anchor inside. The header is the disclosure
   (`aria-expanded`, `aria-controls`), `buttons` are real buttons (several; `disabled`, and `busy`, which keeps a focus on
-  the button – `aria-disabled` – and ignores further clicks), an optional close button (`dismissLabel`). A toast that
-  stays should have a description: the close button lives in the card, so a title-only toast cannot be closed by keyboard. The collapsed card is `inert`. Keyboard and touch open it without hover; focus keeps it open; Escape
+  the button – `aria-disabled` – and ignores further clicks). With `dismissLabel` a small close button sits beside the
+  pill, in its fill – its own control, never inside the disclosure or the card, so every toast (title only, timed or
+  persistent) can be closed by keyboard and touch. The collapsed card is `inert`. Keyboard and touch open it without hover; focus keeps it open; Escape
   closes it from inside only, never a key already handled (a dialog). A toast that leaves with the focus hands it to the
   next toast or back to where it came from, never out of an open modal (aria-modal, an open Radix dialog, a native modal
   dialog). The same happens when an update removes or disables the focused control or closes the card into `inert`, and
@@ -66,6 +71,10 @@ Additions and changes, with their reasons:
   one (0.1.6 never opened it), so an error or a waiting decision is seen; `autopilot: false` turns it off.
 - **Stack:** `visibleToasts` limits the toasts per position (the one in use stays shown), the rest behind a "more"
   button (`moreLabel`, `lessLabel`); `label` names the region. Safe-area padding at the screen edges.
+- **Narrow screens:** below 374 px the toast takes the width there is (`min(350px, 100vw - 1.5rem)`, safe areas
+  apart); SVG, gooey filter, pill and card use that one measured width (0.1.6 drew 350 px and was cut off). A title longer
+  than the pill can be is cut with an ellipsis and shown whole in the card; descriptions and actions wrap. Above 374 px
+  nothing changes.
 - **Contrast:** with an explicit theme the original colours miss 4.5:1 (light toast: every text 2.0–3.9; dark toast:
   the buttons 4.0, the loading title 3.7). Per theme only the colour values change (darker state colours and description on the light toast,
   lighter button text on the dark one); measured over the SVG fill.
