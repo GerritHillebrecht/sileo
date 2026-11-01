@@ -554,6 +554,27 @@ describe("controls", () => {
     });
   }
 
+  it("a running toast with actions opens to reach them; one without stays a pill", () => {
+    render(<Toaster />);
+    show({ id: "job", title: "Verarbeitung dauert länger", type: "loading", description: "Pizza", buttons: [{ title: "Status prüfen", onClick: () => {} }], duration: null });
+    show({ id: "plain", title: "Läuft", type: "loading", description: "Pizza", duration: null });
+    fireEvent.click(toastOf("job")!.querySelector<HTMLElement>("[data-sileo-header]")!);
+    expect(toastOf("job")?.dataset.expanded).toBe("true");
+    expect(screen.getByRole("button", { name: "Status prüfen" }).closest("[inert]")).toBeNull();
+    fireEvent.click(toastOf("plain")!.querySelector<HTMLElement>("[data-sileo-header]")!);
+    expect(toastOf("plain")?.dataset.expanded).toBe("false");
+  });
+
+  it("with a limited stack the higher priority stays shown, not just the newest", () => {
+    render(<Toaster visibleToasts={1} moreLabel={(n) => `${n} weitere`} lessLabel="Weniger" />);
+    show({ id: "order", title: "Neue Bestellung", priority: 10, duration: null });
+    show({ id: "saved", title: "Gespeichert", duration: null });
+    expect(liveToasts().map((t) => t.dataset.id)).toEqual(["order"]);
+    show({ id: "urgent", title: "Zahlung ungeklärt", priority: 20, duration: null });
+    expect(liveToasts().map((t) => t.dataset.id)).toEqual(["urgent"]);
+    expect(screen.getByRole("button", { name: "2 weitere" })).toBeTruthy();
+  });
+
   it("shows at most visibleToasts and keeps the rest reachable", () => {
     render(<Toaster visibleToasts={3} moreLabel={(n) => `${n} weitere`} lessLabel="Weniger" />);
     for (const id of ["a", "b", "c", "d", "e"]) show({ id, title: id, duration: null });

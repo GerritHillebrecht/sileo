@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const VERSION = "0.1.6-oneserve.3";
+const VERSION = "0.1.6-oneserve.4";
 const packageDir = join(dirname(fileURLToPath(import.meta.url)), "..");
 const source = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8"));
 if (!existsSync(join(packageDir, "dist", "index.mjs"))) throw new Error("dist missing: run bun run build first");

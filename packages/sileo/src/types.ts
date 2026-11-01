@@ -60,6 +60,11 @@ export interface SileoOptions {
    * id of a live toast and update() are no leaving: they call nothing, and without a new callback the current one stays.
    */
   onDismiss?: (id: string, reason: SileoDismissReason) => void;
+  /**
+   * Which toasts stay shown when `visibleToasts` limits the stack: the higher priority first, the newer one among equals
+   * (default 0: the newest, as 0.1.6). The order on screen stays the order of arrival.
+   */
+  priority?: number;
   /** Called when someone starts (true) or stops (false) working with the toast: the focus or a mouse pointer on it. */
   onHold?: (id: string, held: boolean) => void;
   /** Accessible name of the close button beside the pill; without it the toast has none (it may still be swiped away). */

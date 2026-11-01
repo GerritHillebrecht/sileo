@@ -194,7 +194,8 @@ export const Sileo = memo(function Sileo({
   const maxPillWidth = Math.max(HEIGHT, width - closeSpace);
   const truncated = pillWidth > maxPillWidth;
   const hasDesc = Boolean(view.description) || actions.length > 0 || truncated;
-  const isLoading = view.state === "loading";
+  /* a running toast stays a pill (0.1.6) – unless it has actions, which must stay reachable (e.g. "check the status") */
+  const isLoading = view.state === "loading" && actions.length === 0;
   const open = hasDesc && !isLoading && (userOpen ?? (isExpanded || focusInside));
   const contentId = `sileo-content-${id}`;
   const allowExpand = isLoading ? false : (canExpand ?? (!interruptKey || interruptKey === id));

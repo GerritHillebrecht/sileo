@@ -71,6 +71,9 @@ Additions and changes, with their reasons:
   one (0.1.6 never opened it), so an error or a waiting decision is seen; `autopilot: false` turns it off.
 - **Stack:** `visibleToasts` limits the toasts per position (the one in use stays shown), the rest behind a "more"
   button (`moreLabel`, `lessLabel`); `label` names the region. Safe-area padding at the screen edges.
+- **Priority and running toasts:** with `visibleToasts`, a toast's `priority` decides which stay shown (the higher first,
+  the newest among equals; default as 0.1.6: the newest); the order on screen stays the order of arrival. A running
+  (`loading`) toast with actions opens like any other, so its actions stay reachable; without actions it stays a pill.
 - **Narrow screens:** below 374 px the toast takes the width there is (`min(350px, 100vw - 1.5rem)`, safe areas
   apart); SVG, gooey filter, pill and card use that one measured width (0.1.6 drew 350 px and was cut off). A title longer
   than the pill can be is cut with an ellipsis and shown whole in the card; descriptions and actions wrap. Above 374 px

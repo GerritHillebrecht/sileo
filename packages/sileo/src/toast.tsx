@@ -662,10 +662,15 @@ export function Toaster({
     if (visibleToasts === undefined || visibleToasts <= 0 || showAll.has(pos) || live.length <= visibleToasts) {
       return { shown: items, hidden: 0 };
     }
-    let kept = live.slice(-visibleToasts);
-    /* the toasts in use stay; the oldest of the newest give way to them */
+    /* the highest priority first, the newest among equals (0.1.6: the newest) */
+    const ranked = live
+      .map((t, index) => ({ t, index }))
+      .sort((a, b) => (b.t.priority ?? 0) - (a.t.priority ?? 0) || b.index - a.index)
+      .map(({ t }) => t);
+    let kept = ranked.slice(0, visibleToasts);
+    /* the toasts in use stay; the last of the ranked ones give way to them */
     const held = live.filter((t) => (t.id === focusedId || t.id === hoveredId) && !kept.includes(t));
-    if (held.length > 0) kept = [...held, ...kept.slice(held.length)];
+    if (held.length > 0) kept = [...held, ...kept.slice(0, Math.max(0, kept.length - held.length))];
     const keep = new Set(kept);
     return {
       shown: items.filter((t) => t.exiting || keep.has(t)),
