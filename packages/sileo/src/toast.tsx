@@ -1,6 +1,7 @@
 import {
   type CSSProperties,
-  type MouseEventHandler,
+  type FocusEvent,
+  type PointerEventHandler,
   type ReactNode,
   useCallback,
   useEffect,
@@ -15,7 +16,7 @@ import {
   EXIT_DURATION,
 } from "./constants";
 import { Sileo } from "./sileo";
-import type { SileoOptions, SileoPosition, SileoState } from "./types";
+import type { SileoDismissReason, SileoOptions, SileoPosition, SileoState } from "./types";
 
 const pillAlign = (pos: SileoPosition) =>
   pos.includes("right") ? "right" : pos.includes("center") ? "center" : "left";
@@ -25,13 +26,15 @@ const expandDir = (pos: SileoPosition) =>
 /* ---------------------------------- Types --------------------------------- */
 
 interface InternalSileoOptions extends SileoOptions {
-  id?: string;
   state?: SileoState;
 }
 
 interface SileoItem extends InternalSileoOptions {
   id: string;
+  /* the shown instance: a new one on show() and on a promise result (the content swaps with its animation); update() keeps it */
   instanceId: string;
+  /* the lifetime: a new one whenever a duration is set, so the time starts anew; update() without a duration keeps it */
+  lifetimeId: string;
   exiting?: boolean;
   autoExpandDelayMs?: number;
   autoCollapseDelayMs?: number;
@@ -46,20 +49,28 @@ export interface SileoToasterProps {
   offset?: SileoOffsetValue | SileoOffsetConfig;
   options?: Partial<SileoOptions>;
   theme?: "light" | "dark" | "system";
+  /** Name of the toast region(s). */
+  label?: string;
+  /** At most this many toasts per position at once; the rest behind a "more" button. Default: all. */
+  visibleToasts?: number;
+  moreLabel?: (hidden: number) => string;
+  lessLabel?: string;
 }
 
 /* ------------------------------ Global State ------------------------------ */
 
-type SileoListener = (toasts: SileoItem[]) => void;
+type SileoListener = () => void;
+type Announcement = { text: string; urgency: "polite" | "assertive"; seq: number };
 
 const store = {
   toasts: [] as SileoItem[],
+  announcement: null as Announcement | null,
   listeners: new Set<SileoListener>(),
   position: "top-right" as SileoPosition,
   options: undefined as Partial<SileoOptions> | undefined,
 
   emit() {
-    for (const fn of this.listeners) fn(this.toasts);
+    for (const fn of this.listeners) fn();
   },
 
   update(fn: (prev: SileoItem[]) => SileoItem[]) {
@@ -72,26 +83,68 @@ let idCounter = 0;
 const generateId = () =>
   `${++idCounter}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
-const timeoutKey = (t: SileoItem) => `${t.id}:${t.instanceId}`;
+const timeoutKey = (t: SileoItem) => `${t.id}:${t.lifetimeId}`;
+const liveItem = (id: string) => store.toasts.find((t) => t.id === id && !t.exiting);
+
+let announceSeq = 0;
+const announce = (text: string | false | undefined, urgency: "polite" | "assertive" = "polite") => {
+  if (!text) return;
+  store.announcement = { text, urgency, seq: ++announceSeq };
+  store.emit();
+};
 
 /* ------------------------------- Toast API -------------------------------- */
 
-const dismissToast = (id: string) => {
+const reportDismiss = (item: SileoItem, reason: SileoDismissReason) => {
+  try {
+    item.onDismiss?.(item.id, reason);
+  } catch (error) {
+    // a failing listener must not keep the toast or the store in a half state
+    queueMicrotask(() => {
+      throw error;
+    });
+  }
+};
+
+const dismissToast = (id: string, reason: SileoDismissReason = "programmatic") => {
+  const item = liveItem(id);
+  if (!item) return false;
+  const instanceId = item.instanceId;
+
+  store.update((prev) =>
+    prev.map((t) => (t.id === id && t.instanceId === instanceId ? { ...t, exiting: true } : t)),
+  );
+  reportDismiss(item, reason);
+
+  /* removes only this instance: a toast set again with the same id meanwhile stays */
+  setTimeout(
+    () =>
+      store.update((prev) =>
+        prev.filter((t) => !(t.id === id && t.instanceId === instanceId && t.exiting)),
+      ),
+    EXIT_DURATION,
+  );
+  return true;
+};
+
+/* takes the toast out at once, without the exit phase (also one already leaving): nothing of it stays readable */
+const removeToast = (id: string, reason: SileoDismissReason) => {
   const item = store.toasts.find((t) => t.id === id);
-  if (!item || item.exiting) return;
-
-  store.update((prev) => prev.map((t) => (t.id === id ? { ...t, exiting: true } : t)));
-
-  setTimeout(() => store.update((prev) => prev.filter((t) => t.id !== id)), EXIT_DURATION);
+  if (!item) return false;
+  store.update((prev) => prev.filter((t) => t.id !== id));
+  /* a leaving toast reported its reason when it started to leave */
+  if (!item.exiting) reportDismiss(item, reason);
+  return true;
 };
 
 const resolveAutopilot = (
   opts: InternalSileoOptions,
   duration: number | null,
 ): { expandDelayMs?: number; collapseDelayMs?: number } => {
-  if (opts.autopilot === false || !duration || duration <= 0) return {};
+  if (opts.autopilot === false || (duration !== null && duration <= 0)) return {};
   const cfg = typeof opts.autopilot === "object" ? opts.autopilot : undefined;
-  const clamp = (v: number) => Math.min(duration, Math.max(0, v));
+  /* a toast that stays (duration null) opens once as well, so an error or a waiting decision is seen; 0.1.6 never opened it */
+  const clamp = (v: number) => (duration === null ? Math.max(0, v) : Math.min(duration, Math.max(0, v)));
   return {
     expandDelayMs: clamp(cfg?.expand ?? AUTO_EXPAND_DELAY),
     collapseDelayMs: clamp(cfg?.collapse ?? AUTO_COLLAPSE_DELAY),
@@ -109,40 +162,75 @@ const buildSileoItem = (
   id: string,
   fallbackPosition?: SileoPosition,
 ): SileoItem => {
-  const duration = merged.duration ?? DEFAULT_TOAST_DURATION;
+  const duration = merged.duration === undefined ? DEFAULT_TOAST_DURATION : merged.duration;
   const auto = resolveAutopilot(merged, duration);
   return {
     ...merged,
     id,
+    duration,
     instanceId: generateId(),
+    lifetimeId: generateId(),
     position: merged.position ?? fallbackPosition ?? store.position,
     autoExpandDelayMs: auto.expandDelayMs,
     autoCollapseDelayMs: auto.collapseDelayMs,
   };
 };
 
-const createToast = (options: InternalSileoOptions) => {
-  const live = store.toasts.filter((t) => !t.exiting);
-  const merged = mergeOptions(options);
+/* setting a live toast anew is no leaving: without a callback of its own the next instance keeps the current one */
+const keepCallbacks = (merged: InternalSileoOptions, current: SileoItem | undefined): InternalSileoOptions =>
+  current
+    ? { ...merged, onDismiss: merged.onDismiss ?? current.onDismiss, onHold: merged.onHold ?? current.onHold }
+    : merged;
 
-  const id = merged.id ?? "sileo-default";
-  const prev = live.find((t) => t.id === id);
+const createToast = (options: InternalSileoOptions) => {
+  const id = options.id ?? generateId();
+  const prev = liveItem(id);
+  const merged = keepCallbacks(mergeOptions(options), prev);
   const item = buildSileoItem(merged, id, prev?.position);
 
   if (prev) {
-    store.update((p) => p.map((t) => (t.id === id ? item : t)));
+    store.update((p) => p.map((t) => (t === prev ? item : t)));
   } else {
+    /* a leaving toast with the same id gives way to the new one */
     store.update((p) => [...p.filter((t) => t.id !== id), item]);
   }
-  return { id, duration: merged.duration ?? DEFAULT_TOAST_DURATION };
+  announce(merged.announce === false ? false : (merged.announce ?? merged.title), merged.urgency);
+  return item;
 };
 
-const updateToast = (id: string, options: InternalSileoOptions) => {
-  const existing = store.toasts.find((t) => t.id === id);
-  if (!existing) return;
+/* the next state of a live toast: a new instance (its content swaps with the original animation), same place */
+const replaceToast = (id: string, options: InternalSileoOptions) => {
+  const existing = liveItem(id);
+  if (!existing) return false;
+  const item = buildSileoItem(keepCallbacks(mergeOptions(options), existing), id, existing.position);
+  store.update((prev) => prev.map((t) => (t === existing ? item : t)));
+  announce(options.announce === false ? false : (options.announce ?? options.title), options.urgency);
+  return true;
+};
 
-  const item = buildSileoItem(mergeOptions(options), id, existing.position);
-  store.update((prev) => prev.map((t) => (t.id === id ? item : t)));
+/*
+ * A quiet change of a live toast: same instance, no swap animation, no new entrance. The time runs on unless a duration
+ * is given: then it starts anew with it (null keeps the toast until it is dismissed). An unknown, dismissed or leaving id
+ * is left alone – an update never brings a closed process back.
+ */
+const updateToast = (id: string, patch: SileoOptions) => {
+  const existing = liveItem(id);
+  if (!existing) return false;
+  /* the place stays: a toast moved to another viewport would enter anew (and lose a focus it holds) */
+  const { type, position: _position, ...rest } = patch;
+  const restarts = patch.duration !== undefined;
+  const item: SileoItem = {
+    ...existing,
+    ...rest,
+    id,
+    state: type ?? existing.state,
+    styles: patch.styles ? { ...existing.styles, ...patch.styles } : existing.styles,
+    duration: restarts ? (patch.duration ?? null) : existing.duration,
+    lifetimeId: restarts ? generateId() : existing.lifetimeId,
+  };
+  store.update((prev) => prev.map((t) => (t === existing ? item : t)));
+  if (typeof patch.announce === "string") announce(patch.announce, patch.urgency ?? existing.urgency);
+  return true;
 };
 
 export interface SileoPromiseOptions<T = unknown> {
@@ -161,39 +249,62 @@ export const sileo = {
   info: (opts: SileoOptions) => createToast({ ...opts, state: "info" }).id,
   action: (opts: SileoOptions) => createToast({ ...opts, state: "action" }).id,
 
+  /** Changes a live toast quietly; false when the id is unknown, dismissed or leaving. */
+  update: (id: string, patch: SileoOptions) => updateToast(id, patch),
+
   promise: <T,>(
     promise: Promise<T> | (() => Promise<T>),
     opts: SileoPromiseOptions<T>,
   ): Promise<T> => {
-    const { id } = createToast({
+    const created = createToast({
       ...opts.loading,
       state: "loading",
       duration: null,
       position: opts.position,
     });
+    const { id } = created;
+    /* the result belongs to this instance only: not to a toast set anew, dismissed or cleared meanwhile */
+    const stillOurs = () => {
+      const current = liveItem(id);
+      return current !== undefined && current.instanceId === created.instanceId;
+    };
 
     const p = typeof promise === "function" ? promise() : promise;
 
-    p.then((data) => {
-      if (opts.action) {
-        const actionOpts = typeof opts.action === "function" ? opts.action(data) : opts.action;
-        updateToast(id, { ...actionOpts, state: "action", id });
-      } else {
-        const successOpts = typeof opts.success === "function" ? opts.success(data) : opts.success;
-        updateToast(id, { ...successOpts, state: "success", id });
-      }
-    }).catch((err) => {
-      const errorOpts = typeof opts.error === "function" ? opts.error(err) : opts.error;
-      updateToast(id, { ...errorOpts, state: "error", id });
-    });
+    p.then(
+      (data) => {
+        if (!stillOurs()) return;
+        if (opts.action) {
+          const actionOpts = typeof opts.action === "function" ? opts.action(data) : opts.action;
+          replaceToast(id, { ...actionOpts, state: "action", id });
+        } else {
+          const successOpts = typeof opts.success === "function" ? opts.success(data) : opts.success;
+          replaceToast(id, { ...successOpts, state: "success", id });
+        }
+      },
+      (err) => {
+        if (!stillOurs()) return;
+        const errorOpts = typeof opts.error === "function" ? opts.error(err) : opts.error;
+        replaceToast(id, { ...errorOpts, state: "error", id });
+      },
+    );
 
     return p;
   },
 
-  dismiss: dismissToast,
+  /**
+   * Lets the toast leave ("programmatic"). With `immediate` it is gone at once, without the exit phase – for a change of
+   * context (another user or location) where nothing of the old one may stay readable or operable while it fades.
+   */
+  dismiss: (id: string, options?: { immediate?: boolean }) =>
+    options?.immediate ? removeToast(id, "programmatic") : dismissToast(id, "programmatic"),
 
-  clear: (position?: SileoPosition) =>
-    store.update((prev) => (position ? prev.filter((t) => t.position !== position) : [])),
+  /** Removes the toasts (of one position) at once; each reports "clear". The way to end everything, e.g. on sign-out. */
+  clear: (position?: SileoPosition) => {
+    const leaving = store.toasts.filter((t) => !t.exiting && (!position || t.position === position));
+    store.update((prev) => (position ? prev.filter((t) => t.position !== position) : []));
+    for (const item of leaving) reportDismiss(item, "clear");
+  },
 };
 
 /* ------------------------------ Toaster Component ------------------------- */
@@ -225,27 +336,83 @@ function useResolvedTheme(theme: "light" | "dark" | "system" | undefined): "ligh
   return resolved;
 }
 
+/* an open modal: one that declares itself, an open Radix dialog (it sets no aria-modal) or a native modal dialog – visible only */
+const openModals = () =>
+  Array.from(
+    document.querySelectorAll<HTMLElement>(
+      '[aria-modal="true"], [role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"], dialog:modal',
+    ),
+  ).filter((el) => el.getClientRects().length > 0);
+
+/* a target the focus may go to: present, operable, not hidden from assistive technology, and not out of an open modal */
+const focusable = (el: HTMLElement | null | undefined): el is HTMLElement => {
+  if (!el || !el.isConnected || el.matches(":disabled")) return false;
+  if (el.closest('[inert], [aria-hidden="true"]')) return false;
+  return openModals().every((modal) => modal.contains(el));
+};
+
 export function Toaster({
   children,
   position = "top-right",
   offset,
   options,
   theme,
+  label = "Notifications",
+  visibleToasts,
+  moreLabel = (hidden) => `${hidden} more`,
+  lessLabel = "Show less",
 }: SileoToasterProps) {
   const resolvedTheme = useResolvedTheme(theme);
   const [toasts, setToasts] = useState<SileoItem[]>(store.toasts);
+  /* only announcements made after this Toaster mounted: a remount never reads an old one again */
+  const mountedSeq = useRef(store.announcement?.seq ?? 0);
+  const [announcement, setAnnouncement] = useState<Announcement | null>(null);
   const [activeId, setActiveId] = useState<string>();
+  /* the toast holding the focus and the one under a mouse pointer – both stay shown, active and open */
+  const [focusedId, setFocusedId] = useState<string>();
+  const [hoveredId, setHoveredId] = useState<string>();
+  const heldRef = useRef<{ focused?: string; hovered?: string }>({});
+  heldRef.current = { focused: focusedId, hovered: hoveredId };
+  /* onHold: the callback is kept from the start of the hold, so the release reaches it also after the toast was removed */
+  const holdsRef = useRef(new Map<string, SileoItem["onHold"]>());
+  useEffect(() => {
+    const held = new Set([focusedId, hoveredId].filter((id): id is string => id !== undefined));
+    for (const [id, onHold] of holdsRef.current) {
+      if (held.has(id)) continue;
+      holdsRef.current.delete(id);
+      onHold?.(id, false);
+    }
+    for (const id of held) {
+      if (holdsRef.current.has(id)) continue;
+      const onHold = store.toasts.find((t) => t.id === id)?.onHold;
+      holdsRef.current.set(id, onHold);
+      onHold?.(id, true);
+    }
+  }, [focusedId, hoveredId]);
+  /* an unmounted Toaster holds nothing any more */
+  useEffect(() => {
+    const holds = holdsRef.current;
+    return () => {
+      for (const [id, onHold] of holds) onHold?.(id, false);
+      holds.clear();
+    };
+  }, []);
+  const [showAll, setShowAll] = useState<ReadonlySet<SileoPosition>>(new Set());
 
-  const hoverRef = useRef(false);
-  const timersRef = useRef(new Map<string, number>());
+  const pausedByPointer = useRef(false);
+  const pausedByFocus = useRef(false);
+  /* running timers of this Toaster (never the global store): end time per lifetime, and the rest while paused */
+  const timersRef = useRef(new Map<string, { handle: number; endsAt: number }>());
+  const remainingRef = useRef(new Map<string, number>());
   const listRef = useRef(toasts);
   const latestRef = useRef<string | undefined>(undefined);
+  const originRef = useRef<HTMLElement | null>(null);
   const handlersCache = useRef(
     new Map<
       string,
       {
-        enter: MouseEventHandler<HTMLButtonElement>;
-        leave: MouseEventHandler<HTMLButtonElement>;
+        enter: PointerEventHandler<HTMLElement>;
+        leave: PointerEventHandler<HTMLElement>;
         dismiss: () => void;
       }
     >(),
@@ -256,32 +423,47 @@ export function Toaster({
     store.options = options;
   }, [position, options]);
 
-  const clearAllTimers = useCallback(() => {
-    for (const t of timersRef.current.values()) clearTimeout(t);
+  const paused = () => pausedByPointer.current || pausedByFocus.current;
+
+  const pauseAll = useCallback(() => {
+    const now = Date.now();
+    for (const [key, timer] of timersRef.current) {
+      clearTimeout(timer.handle);
+      remainingRef.current.set(key, Math.max(0, timer.endsAt - now));
+    }
     timersRef.current.clear();
   }, []);
 
   const schedule = useCallback((items: SileoItem[]) => {
-    if (hoverRef.current) return;
+    if (paused()) return;
 
     for (const item of items) {
       if (item.exiting) continue;
       const key = timeoutKey(item);
       if (timersRef.current.has(key)) continue;
+      if (item.duration === null || item.duration === undefined || item.duration <= 0) continue;
 
-      if (item.duration === null) continue;
-      const dur = item.duration ?? DEFAULT_TOAST_DURATION;
-      if (dur <= 0) continue;
-
-      timersRef.current.set(
-        key,
-        window.setTimeout(() => dismissToast(item.id), dur),
-      );
+      const wait = remainingRef.current.get(key) ?? item.duration;
+      remainingRef.current.delete(key);
+      const { id, lifetimeId } = item;
+      timersRef.current.set(key, {
+        endsAt: Date.now() + wait,
+        handle: window.setTimeout(() => {
+          timersRef.current.delete(key);
+          /* only the lifetime it was started for */
+          const current = liveItem(id);
+          if (current && current.lifetimeId === lifetimeId) dismissToast(id, "timeout");
+        }, wait),
+      });
     }
   }, []);
 
   useEffect(() => {
-    const listener: SileoListener = (next) => setToasts(next);
+    const listener: SileoListener = () => {
+      setToasts(store.toasts);
+      const next = store.announcement;
+      if (next && next.seq > mountedSeq.current) setAnnouncement(next);
+    };
     store.listeners.add(listener);
     /*
      * Re-read on subscribing, because the state above was seeded during render
@@ -296,44 +478,56 @@ export function Toaster({
      * reference comparison — React bails out when nothing moved.
      */
     setToasts(store.toasts);
+    const timers = timersRef.current;
     return () => {
       store.listeners.delete(listener);
-      clearAllTimers();
+      /* unmounting ends this Toaster's own timers only; the toasts stay in the store (a remount picks them up) */
+      for (const timer of timers.values()) clearTimeout(timer.handle);
+      timers.clear();
     };
-  }, [clearAllTimers]);
+  }, []);
+
+  /* the focus went to the page because the control holding it was removed (clear(), a toast pushed out): it goes on to
+     the next toast or back to where it came from, and the time no longer waits for a focus that is gone */
+  const focusLost = useCallback(() => {
+    if (!pausedByFocus.current) return;
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && active.closest("[data-sileo-viewport]")) return;
+    if (active === null || active === document.body) handleFocusLeaveRef.current?.(undefined);
+    const now = document.activeElement;
+    if (now instanceof HTMLElement && now.closest("[data-sileo-viewport]")) return;
+    pausedByFocus.current = false;
+    setFocusedId(undefined);
+    schedule(listRef.current);
+  }, [schedule]);
 
   useEffect(() => {
     listRef.current = toasts;
 
     const toastKeys = new Set(toasts.map(timeoutKey));
+    const liveIds = new Set(toasts.filter((t) => !t.exiting).map((t) => t.id));
     const toastIds = new Set(toasts.map((t) => t.id));
     for (const [key, timer] of timersRef.current) {
       if (!toastKeys.has(key)) {
-        clearTimeout(timer);
+        clearTimeout(timer.handle);
         timersRef.current.delete(key);
       }
+    }
+    for (const key of remainingRef.current.keys()) {
+      if (!toastKeys.has(key)) remainingRef.current.delete(key);
     }
     for (const id of handlersCache.current.keys()) {
       if (!toastIds.has(id)) handlersCache.current.delete(id);
     }
+    /* the toast under the pointer left without a pointerleave (closed, swiped, cleared): the pointer no longer holds the time */
+    if (hoveredId !== undefined && !liveIds.has(hoveredId)) {
+      setHoveredId(undefined);
+      pausedByPointer.current = false;
+    }
 
+    focusLost();
     schedule(toasts);
-  }, [toasts, schedule]);
-
-  const handleMouseEnterRef = useRef<MouseEventHandler<HTMLButtonElement>>(null);
-  const handleMouseLeaveRef = useRef<MouseEventHandler<HTMLButtonElement>>(null);
-
-  handleMouseEnterRef.current = useCallback<MouseEventHandler<HTMLButtonElement>>(() => {
-    if (hoverRef.current) return;
-    hoverRef.current = true;
-    clearAllTimers();
-  }, [clearAllTimers]);
-
-  handleMouseLeaveRef.current = useCallback<MouseEventHandler<HTMLButtonElement>>(() => {
-    if (!hoverRef.current) return;
-    hoverRef.current = false;
-    schedule(listRef.current);
-  }, [schedule]);
+  }, [toasts, schedule, hoveredId, focusLost]);
 
   const latest = useMemo(() => {
     for (let i = toasts.length - 1; i >= 0; i--) {
@@ -342,30 +536,89 @@ export function Toaster({
     return undefined;
   }, [toasts]);
 
+  /* the newest toast is the active one – unless one is in use, which a newcomer never closes */
   useEffect(() => {
     latestRef.current = latest;
-    setActiveId(latest);
+    setActiveId(heldRef.current.focused ?? heldRef.current.hovered ?? latest);
   }, [latest]);
 
-  const getHandlers = useCallback((toastId: string) => {
-    let cached = handlersCache.current.get(toastId);
-    if (cached) return cached;
+  const getHandlers = useCallback(
+    (toastId: string) => {
+      let cached = handlersCache.current.get(toastId);
+      if (cached) return cached;
 
-    cached = {
-      enter: ((e) => {
-        setActiveId((prev) => (prev === toastId ? prev : toastId));
-        handleMouseEnterRef.current?.(e);
-      }) as MouseEventHandler<HTMLButtonElement>,
-      leave: ((e) => {
-        setActiveId((prev) => (prev === latestRef.current ? prev : latestRef.current));
-        handleMouseLeaveRef.current?.(e);
-      }) as MouseEventHandler<HTMLButtonElement>,
-      dismiss: () => dismissToast(toastId),
-    };
+      cached = {
+        /* a mouse pointer only: a tap fires pointerenter too, but has no "leave" to end the pause reliably */
+        enter: ((e) => {
+          if (e.pointerType !== "mouse") return;
+          setActiveId(toastId);
+          setHoveredId(toastId);
+          if (!pausedByPointer.current) {
+            pausedByPointer.current = true;
+            pauseAll();
+          }
+        }) as PointerEventHandler<HTMLElement>,
+        leave: ((e) => {
+          if (e.pointerType !== "mouse") return;
+          setHoveredId((prev) => (prev === toastId ? undefined : prev));
+          setActiveId(heldRef.current.focused ?? latestRef.current);
+          if (pausedByPointer.current) {
+            pausedByPointer.current = false;
+            schedule(listRef.current);
+          }
+        }) as PointerEventHandler<HTMLElement>,
+        dismiss: () => dismissToast(toastId, "user"),
+      };
 
-    handlersCache.current.set(toastId, cached);
-    return cached;
+      handlersCache.current.set(toastId, cached);
+      return cached;
+    },
+    [pauseAll, schedule],
+  );
+
+  /* keyboard: focus inside a toast pauses the time like the pointer does, and keeps that toast shown and active */
+  const handleFocus = useCallback(
+    (e: FocusEvent<HTMLElement>) => {
+      const from = e.relatedTarget;
+      if (from instanceof HTMLElement && !from.closest("[data-sileo-viewport]")) originRef.current = from;
+      const toast = (e.target as HTMLElement).closest<HTMLElement>("[data-sileo-toast]");
+      if (toast?.dataset.id) {
+        setFocusedId(toast.dataset.id);
+        setActiveId(toast.dataset.id);
+      }
+      if (!pausedByFocus.current) {
+        pausedByFocus.current = true;
+        pauseAll();
+      }
+    },
+    [pauseAll],
+  );
+  const handleBlur = useCallback(
+    (e: FocusEvent<HTMLElement>) => {
+      const to = e.relatedTarget;
+      if (to instanceof HTMLElement && to.closest("[data-sileo-viewport]")) return;
+      setFocusedId(undefined);
+      pausedByFocus.current = false;
+      schedule(listRef.current);
+    },
+    [schedule],
+  );
+
+  /* a toast that loses the control holding the focus hands it to the next toast's disclosure, else back to where it came
+     from – only to a target that can take it, never out of an open modal; checked after the attempt */
+  const handleFocusLeave = useCallback((leavingId: string | undefined) => {
+    const next = Array.from(
+      document.querySelectorAll<HTMLElement>(
+        '[data-sileo-toast]:not([data-exiting="true"]) button[data-sileo-header]',
+      ),
+    ).find((el) => el.closest<HTMLElement>("[data-sileo-toast]")?.dataset.id !== leavingId && focusable(el));
+    next?.focus();
+    if (next && document.activeElement === next) return;
+    const origin = originRef.current;
+    if (focusable(origin)) origin.focus();
   }, []);
+  const handleFocusLeaveRef = useRef(handleFocusLeave);
+  handleFocusLeaveRef.current = handleFocusLeave;
 
   const getViewportStyle = useCallback(
     (pos: SileoPosition): CSSProperties | undefined => {
@@ -403,12 +656,48 @@ export function Toaster({
     return map;
   }, [toasts, position]);
 
+  /* at most visibleToasts per position (the newest), plus the one someone works with; the rest behind "more" */
+  const shownOf = (pos: SileoPosition, items: SileoItem[]) => {
+    const live = items.filter((t) => !t.exiting);
+    if (visibleToasts === undefined || visibleToasts <= 0 || showAll.has(pos) || live.length <= visibleToasts) {
+      return { shown: items, hidden: 0 };
+    }
+    /* the highest priority first, the newest among equals (0.1.6: the newest) */
+    const ranked = live
+      .map((t, index) => ({ t, index }))
+      .sort((a, b) => (b.t.priority ?? 0) - (a.t.priority ?? 0) || b.index - a.index)
+      .map(({ t }) => t);
+    let kept = ranked.slice(0, visibleToasts);
+    /* the toasts in use stay; the last of the ranked ones give way to them */
+    const held = live.filter((t) => (t.id === focusedId || t.id === hoveredId) && !kept.includes(t));
+    if (held.length > 0) kept = [...held, ...kept.slice(0, Math.max(0, kept.length - held.length))];
+    const keep = new Set(kept);
+    return {
+      shown: items.filter((t) => t.exiting || keep.has(t)),
+      hidden: live.length - kept.length,
+    };
+  };
+
+  /* polite or assertive; the same text again is still read (alternating invisible mark) */
+  const announced = announcement
+    ? `${announcement.text}${announcement.seq % 2 ? "" : "\u200b"}`
+    : "";
+  const fill = theme ? THEME_FILLS[resolvedTheme] : undefined;
+
   return (
     <>
       {children}
+      <div data-sileo-announcer aria-live="polite" aria-atomic="true">
+        {announcement?.urgency === "polite" ? announced : ""}
+      </div>
+      <div data-sileo-announcer aria-live="assertive" aria-atomic="true">
+        {announcement?.urgency === "assertive" ? announced : ""}
+      </div>
       {Array.from(activePositions, ([pos, items]) => {
         const pill = pillAlign(pos);
         const expand = expandDir(pos);
+        const { shown, hidden } = shownOf(pos, items);
+        const expandedAll = showAll.has(pos);
 
         return (
           <section
@@ -416,10 +705,12 @@ export function Toaster({
             data-sileo-viewport
             data-position={pos}
             data-theme={theme ? resolvedTheme : undefined}
-            aria-live="polite"
+            aria-label={label}
             style={getViewportStyle(pos)}
+            onFocus={handleFocus}
+            onBlur={handleBlur}
           >
-            {items.map((item) => {
+            {shown.map((item) => {
               const h = getHandlers(item.id);
               return (
                 <Sileo
@@ -431,21 +722,45 @@ export function Toaster({
                   position={pill}
                   expand={expand}
                   icon={item.icon}
-                  fill={item.fill ?? (theme ? THEME_FILLS[resolvedTheme] : undefined)}
+                  fill={item.fill ?? fill}
                   styles={item.styles}
                   button={item.button}
+                  buttons={item.buttons}
+                  stateLabel={item.stateLabel}
+                  dismissLabel={item.dismissLabel}
+                  expandLabel={item.expandLabel}
                   roundness={item.roundness}
                   exiting={item.exiting}
                   autoExpandDelayMs={item.autoExpandDelayMs}
                   autoCollapseDelayMs={item.autoCollapseDelayMs}
                   refreshKey={item.instanceId}
                   canExpand={activeId === undefined || activeId === item.id}
-                  onMouseEnter={h.enter}
-                  onMouseLeave={h.leave}
+                  onPointerEnter={h.enter}
+                  onPointerLeave={h.leave}
+                  inUse={item.id === focusedId || item.id === hoveredId}
                   onDismiss={h.dismiss}
+                  onFocusLeave={handleFocusLeave}
                 />
               );
             })}
+            {hidden > 0 || expandedAll ? (
+              <button
+                type="button"
+                data-sileo-more
+                aria-expanded={expandedAll}
+                style={fill ? ({ "--sileo-more-bg": fill, "--sileo-more-fg": resolvedTheme === "light" ? "#ffffff" : "#1a1a1a" } as CSSProperties) : undefined}
+                onClick={() =>
+                  setShowAll((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(pos)) next.delete(pos);
+                    else next.add(pos);
+                    return next;
+                  })
+                }
+              >
+                {expandedAll ? lessLabel : moreLabel(hidden)}
+              </button>
+            ) : null}
           </section>
         );
       })}

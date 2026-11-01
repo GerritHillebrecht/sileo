@@ -27,3 +27,61 @@ export default function App() {
 ```
 
 For detailed docs, click here: https://sileo.aaryan.design
+
+## OneServe fork
+
+This fork (`GerritHillebrecht/sileo`, branch `feat/oneserve`) keeps Sileo's look and motion and adds what an operations
+app needs. It is packed for OneServe as `@one-serve/sileo` (`bun run pack:oneserve`, see `NOTICE`); the workspace keeps
+the name `sileo`, so the site and CI stay as upstream has them. Upstream `main` is untouched.
+
+Additions and changes, with their reasons:
+
+- **Ids and updates:** a public `id`; without one every toast gets its own (0.1.6 shared `"sileo-default"`, so toasts
+  replaced each other). `show()` with a live id replaces in place (original swap animation); the new `sileo.update(id,
+  patch)` changes a live toast quietly – no swap, no new entrance, the time runs on unless `duration` is given (then it
+  starts anew; `null` keeps the toast). Unknown, dismissed or leaving ids are left alone (`false`).
+- **Lifetimes:** exit removal, timers and promise results act on their own instance only (0.1.6: a toast set again
+  during the 600 ms exit was removed by the old timer, upstream issue #30; a late promise result overwrote a newer
+  toast). Pointer or focus inside pauses the time, which then goes on with what was left. `onDismiss(id, reason)` with
+  `"user" | "timeout" | "programmatic" | "clear"`, once, to the callback of the instance that leaves. `show()` with a live
+  id and `update()` are no leaving: they call nothing, a callback they bring replaces the current one, and without one the
+  current one stays. `onHold(id, held)` reports when the focus or a mouse pointer starts and stops working with a toast
+  (also when it is removed meanwhile), for an app that runs the lifetime itself. `sileo.dismiss(id, { immediate: true })`
+  removes a toast at once, without the exit phase – for a change of user or location, where nothing old may stay readable
+  or operable while it fades. Unmounting a `Toaster` ends its own timers only; `clear()` ends the toasts.
+- **Controls:** the toast is a `group`, not a `button` with an anchor inside. The header is the disclosure
+  (`aria-expanded`, `aria-controls`), `buttons` are real buttons (several; `disabled`, and `busy`, which keeps a focus on
+  the button – `aria-disabled` – and ignores further clicks). With `dismissLabel` a small close button sits beside the
+  pill, in its fill – its own control, never inside the disclosure or the card, so every toast (title only, timed or
+  persistent) can be closed by keyboard and touch. The collapsed card is `inert`. Keyboard and touch open it without hover; focus keeps it open; Escape
+  closes it from inside only, never a key already handled (a dialog). A toast that leaves with the focus hands it to the
+  next toast or back to where it came from, never out of an open modal (aria-modal, an open Radix dialog, a native modal
+  dialog). The same happens when an update removes or disables the focused control or closes the card into `inert`, and
+  when `clear()` removes a focused toast; the time never stays paused for a focus that is gone. Hover is a mouse thing:
+  touch opens through the disclosure, and a tap never pauses the time; the toasts under the focus and the mouse stay shown,
+  active and open when newer ones arrive. `stateLabel` is read after the title.
+- **Announcements:** one polite and one assertive live region per `Toaster`, always present. `show()` announces the
+  title (or `announce`, or nothing with `false`), `update()` only an `announce` it is given; `urgency: "assertive"` on
+  request only. The viewport's own `aria-live` is gone, so nothing is read twice.
+- **Motion:** `motion` is a peer dependency, `^14.7.1` (the version this fork is tested with). With reduced motion (the
+  system setting, or a `MotionConfig` forcing it) no spring, shape morph or gooey filter runs, and the CSS transitions and
+  animations are cut – with `!important`, because 0.1.6's reduced-motion rule lost against the more specific transition
+  rules of the header (width) and the card (fade).
+- **Toasts that stay:** a toast with `duration: null` opens once by itself and closes back to its pill like a timed
+  one (0.1.6 never opened it), so an error or a waiting decision is seen; `autopilot: false` turns it off.
+- **Stack:** `visibleToasts` limits the toasts per position (the one in use stays shown), the rest behind a "more"
+  button (`moreLabel`, `lessLabel`); `label` names the region. Safe-area padding at the screen edges.
+- **Priority and running toasts:** with `visibleToasts`, a toast's `priority` decides which stay shown (the higher first,
+  the newest among equals; default as 0.1.6: the newest); the order on screen stays the order of arrival. A running
+  (`loading`) toast with actions opens like any other, so its actions stay reachable; without actions it stays a pill.
+- **Narrow screens:** below 374 px the toast takes the width there is (`min(350px, 100vw - 1.5rem)`, safe areas
+  apart); SVG, gooey filter, pill and card use that one measured width (0.1.6 drew 350 px and was cut off). A title longer
+  than the pill can be is cut with an ellipsis and shown whole in the card; descriptions and actions wrap. Above 374 px
+  nothing changes.
+- **Contrast:** with an explicit theme the original colours miss 4.5:1 (light toast: every text 2.0–3.9; dark toast:
+  the buttons 4.0, the loading title 3.7). Per theme only the colour values change (darker state colours and description on the light toast,
+  lighter button text on the dark one); measured over the SVG fill.
+- **Looks:** shapes, filter, type and timing are the original, colours apart from the contrast change above; added controls use the original button style.
+  The focus ring uses `--sileo-focus-ring` (default: the action colour). Touch targets grow on coarse pointers.
+
+Tests: `bun run test` (vitest, happy-dom). Motion, focus rings and the filter are checked in a real browser by OneServe.

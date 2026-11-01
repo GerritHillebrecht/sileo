@@ -427,14 +427,17 @@
   }
 }
 
+/* fork: !important, because the transition rules above are more specific (0.1.6 kept the header's width and the card's fade) */
 @media (prefers-reduced-motion: reduce) {
   [data-sileo-viewport],
   [data-sileo-viewport] *,
   [data-sileo-viewport] *::before,
   [data-sileo-viewport] *::after {
-    animation-duration: 0.01ms;
-    animation-iteration-count: 1;
-    transition-duration: 0.01ms;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    animation-delay: 0s !important;
+    transition-duration: 0.01ms !important;
+    transition-delay: 0s !important;
   }
 }
 
@@ -447,3 +450,220 @@
 [data-sileo-viewport][data-theme="light"] [data-sileo-description] {
   color: rgba(255, 255, 255, 0.5);
 }
+
+/* ------------------------------ OneServe fork ----------------------------- */
+/* Additions for separate controls, focus and the stack; the original rules above stay as they are. */
+
+/* resolved per viewport, so it follows the theme's action colour */
+[data-sileo-viewport] {
+  --sileo-focus-ring: var(--sileo-state-action);
+}
+
+/* the header is the disclosure button when there is a description or actions: no browser button look */
+button[data-sileo-header] {
+  appearance: none;
+  margin: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+:is([data-sileo-header], [data-sileo-button], [data-sileo-close], [data-sileo-more]):focus-visible {
+  outline: 2px solid var(--sileo-focus-ring);
+  outline-offset: 2px;
+}
+
+button[data-sileo-header]:focus-visible {
+  border-radius: 9999px;
+}
+
+/* text for screen readers only */
+:is([data-sileo-sr], [data-sileo-announcer]) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+[data-sileo-actions] {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+[data-sileo-actions] [data-sileo-button] {
+  margin-top: 0;
+}
+
+/* one action spans the card, as the original's single button did */
+[data-sileo-actions] [data-sileo-button]:only-child {
+  flex: 1;
+}
+
+[data-sileo-button]:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* the close button beside the pill, in the pill's fill (--_fill), level with the header (CLOSE_SIZE, CLOSE_GAP) */
+[data-sileo-close] {
+  position: absolute;
+  z-index: 20;
+  left: var(--_cx, 0px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 9999px;
+  background-color: var(--_fill, transparent);
+  color: inherit;
+  cursor: pointer;
+}
+
+[data-sileo-close][data-edge="bottom"] {
+  top: calc((var(--sileo-height) - 28px) / 2);
+}
+
+[data-sileo-close][data-edge="top"] {
+  bottom: calc((var(--sileo-height) - 28px) / 2);
+}
+
+[data-sileo-toast][data-ready="true"] [data-sileo-close] {
+  transition: left var(--sileo-duration) var(--sileo-spring-easing);
+}
+
+[data-sileo-close]:hover {
+  background-color: color-mix(in oklch, var(--_fill, transparent) 85%, currentColor);
+}
+
+/* a title too long for the toast: cut in the pill, whole in the card */
+[data-sileo-header-stack],
+[data-sileo-header-inner][data-layer="current"] {
+  min-width: 0;
+  max-width: 100%;
+}
+
+[data-sileo-header-inner] [data-sileo-title] {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+[data-sileo-full-title] {
+  margin: 0 0 0.5rem;
+  overflow-wrap: anywhere;
+}
+
+/* narrower than the original width on a small screen: the toast, and with it SVG, filter and pill, take what there is */
+[data-sileo-toast] {
+  width: min(
+    var(--sileo-width),
+    calc(100vw - 1.5rem - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px))
+  );
+}
+
+[data-sileo-description] {
+  overflow-wrap: anywhere;
+}
+
+/* the toasts beyond the visible ones: at the far end of the stack */
+[data-sileo-more] {
+  order: -1;
+  pointer-events: auto;
+  height: 1.75rem;
+  padding: 0 0.75rem;
+  border: 0;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  color: var(--sileo-more-fg, #1a1a1a);
+  background-color: var(--sileo-more-bg, #ffffff);
+}
+
+/* larger targets for touch */
+@media (pointer: coarse) {
+  :is([data-sileo-button], [data-sileo-more]) {
+    min-height: 2.25rem;
+  }
+
+  /* the visible button stays the pill's size; its target reaches 44 px */
+  [data-sileo-close]::after {
+    content: "";
+    position: absolute;
+    inset: -8px;
+  }
+}
+
+/* reduced motion forced by a MotionConfig (the media query above covers the user's setting) */
+[data-sileo-toast][data-reduced-motion],
+[data-sileo-toast][data-reduced-motion] *,
+[data-sileo-toast][data-reduced-motion] *::before,
+[data-sileo-toast][data-reduced-motion] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  animation-delay: 0s !important;
+  transition-duration: 0.01ms !important;
+  transition-delay: 0s !important;
+}
+
+/* notches and home indicators */
+[data-sileo-viewport][data-position^="top"] {
+  padding-top: max(0.75rem, env(safe-area-inset-top));
+}
+
+[data-sileo-viewport][data-position^="bottom"] {
+  padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+}
+
+[data-sileo-viewport][data-theme="dark"] [data-sileo-close] {
+  color: rgba(0, 0, 0, 0.5);
+}
+
+[data-sileo-viewport][data-theme="light"] [data-sileo-close] {
+  color: rgba(255, 255, 255, 0.5);
+}
+
+/* Contrast (WCAG 1.4.3, 4.5:1): with an explicit theme the original colours fall short – on the light toast (dark theme)
+   every text (2.0–3.9), on the dark toast (light theme) the buttons (4.0) and the loading title (3.7). Only the colour values change, per theme;
+   shapes, layout and motion stay. Measured over the SVG fill (axe cannot see that background). */
+[data-sileo-viewport][data-theme="dark"] {
+  --sileo-state-success: oklch(0.5 0.17 142.136);
+  --sileo-state-loading: oklch(0.47 0 0);
+  --sileo-state-error: oklch(0.52 0.21 25.331);
+  --sileo-state-warning: oklch(0.5 0.12 86.047);
+  --sileo-state-info: oklch(0.5 0.15 237.323);
+  --sileo-state-action: oklch(0.5 0.2 259.815);
+}
+
+[data-sileo-viewport][data-theme="dark"] :is([data-sileo-description], [data-sileo-close]) {
+  color: rgba(0, 0, 0, 0.64);
+}
+
+/* relative colours where the browser has them; elsewhere the buttons keep the state colour above */
+@supports (color: oklch(from red l c h)) {
+  [data-sileo-viewport][data-theme="dark"] [data-sileo-button][data-state] {
+    --sileo-btn-color: oklch(from var(--_c) calc(l - 0.07) c h);
+  }
+
+  [data-sileo-viewport][data-theme="light"] [data-sileo-button][data-state] {
+    --sileo-btn-color: oklch(from var(--_c) calc(l + 0.1) c h);
+  }
+}
+
+[data-sileo-viewport][data-theme="light"] {
+  --sileo-state-loading: oklch(0.66 0 0);
+}
+

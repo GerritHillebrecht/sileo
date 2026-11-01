@@ -28,15 +28,24 @@
   },
   "scripts": {
     "build": "rm -rf dist && bunchee && cp src/styles.css dist/styles.css",
-    "dev": "bunchee --watch"
-  },
-  "dependencies": {
-    "motion": "^12.34.0"
+    "dev": "bunchee --watch",
+    "test": "vitest run",
+    "pack:oneserve": "bun run build && node scripts/pack-oneserve.mjs"
   },
   "devDependencies": {
-    "bunchee": "^6.9.4"
+    "@testing-library/react": "16.3.3",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.7",
+    "bunchee": "^6.9.4",
+    "happy-dom": "21.0.3",
+    "motion": "14.7.1",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "typescript": "5.9.3",
+    "vitest": "5.0.5"
   },
   "peerDependencies": {
+    "motion": "^14.7.1",
     "react": ">=18",
     "react-dom": ">=18"
   }

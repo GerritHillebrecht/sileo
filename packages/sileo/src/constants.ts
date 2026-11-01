@@ -3,6 +3,9 @@
 export const HEIGHT = 40;
 export const WIDTH = 350;
 export const DEFAULT_ROUNDNESS = 16;
+/* fork: the close button beside the pill and its gap to it */
+export const CLOSE_SIZE = 28;
+export const CLOSE_GAP = 6;
 
 /* --------------------------------- Timing --------------------------------- */
 
