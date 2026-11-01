@@ -46,15 +46,22 @@ Additions and changes, with their reasons:
   `"user" | "timeout" | "programmatic" | "clear"`, once. Unmounting a `Toaster` ends its own timers only; `clear()` ends
   the toasts.
 - **Controls:** the toast is a `group`, not a `button` with an anchor inside. The header is the disclosure
-  (`aria-expanded`, `aria-controls`), `buttons` are real buttons (several; `disabled`, `busy`), an optional close button
-  (`dismissLabel`). The collapsed card is `inert`. Keyboard and touch open it without hover; focus keeps it open; Escape
+  (`aria-expanded`, `aria-controls`), `buttons` are real buttons (several; `disabled`, and `busy`, which keeps a focus on
+  the button – `aria-disabled` – and ignores further clicks), an optional close button (`dismissLabel`). A toast that
+  stays should have a description: the close button lives in the card, so a title-only toast cannot be closed by keyboard. The collapsed card is `inert`. Keyboard and touch open it without hover; focus keeps it open; Escape
   closes it from inside only, never a key already handled (a dialog). A toast that leaves with the focus hands it to the
-  next toast or back to where it came from, never out of an open modal. `stateLabel` is read after the title.
+  next toast or back to where it came from, never out of an open modal (aria-modal, an open Radix dialog, a native modal
+  dialog). The same happens when an update removes or disables the focused control or closes the card into `inert`, and
+  when `clear()` removes a focused toast; the time never stays paused for a focus that is gone. Hover is a mouse thing:
+  touch opens through the disclosure, and a tap never pauses the time; the toasts under the focus and the mouse stay shown,
+  active and open when newer ones arrive. `stateLabel` is read after the title.
 - **Announcements:** one polite and one assertive live region per `Toaster`, always present. `show()` announces the
   title (or `announce`, or nothing with `false`), `update()` only an `announce` it is given; `urgency: "assertive"` on
   request only. The viewport's own `aria-live` is gone, so nothing is read twice.
-- **Motion:** `motion` is a peer dependency, `^14.7.1` (the version this fork is tested with). With reduced motion no
-  spring, shape morph or gooey filter runs; the CSS transitions are cut as before.
+- **Motion:** `motion` is a peer dependency, `^14.7.1` (the version this fork is tested with). With reduced motion (the
+  system setting, or a `MotionConfig` forcing it) no spring, shape morph or gooey filter runs, and the CSS transitions and
+  animations are cut – with `!important`, because 0.1.6's reduced-motion rule lost against the more specific transition
+  rules of the header (width) and the card (fade).
 - **Toasts that stay:** a toast with `duration: null` opens once by itself and closes back to its pill like a timed
   one (0.1.6 never opened it), so an error or a waiting decision is seen; `autopilot: false` turns it off.
 - **Stack:** `visibleToasts` limits the toasts per position (the one in use stays shown), the rest behind a "more"

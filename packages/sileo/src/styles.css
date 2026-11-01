@@ -427,14 +427,17 @@
   }
 }
 
+/* fork: !important, because the transition rules above are more specific (0.1.6 kept the header's width and the card's fade) */
 @media (prefers-reduced-motion: reduce) {
   [data-sileo-viewport],
   [data-sileo-viewport] *,
   [data-sileo-viewport] *::before,
   [data-sileo-viewport] *::after {
-    animation-duration: 0.01ms;
-    animation-iteration-count: 1;
-    transition-duration: 0.01ms;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    animation-delay: 0s !important;
+    transition-duration: 0.01ms !important;
+    transition-delay: 0s !important;
   }
 }
 
@@ -451,7 +454,8 @@
 /* ------------------------------ OneServe fork ----------------------------- */
 /* Additions for separate controls, focus and the stack; the original rules above stay as they are. */
 
-:root {
+/* resolved per viewport, so it follows the theme's action colour */
+[data-sileo-viewport] {
   --sileo-focus-ring: var(--sileo-state-action);
 }
 
@@ -570,9 +574,11 @@ button[data-sileo-header]:focus-visible {
 [data-sileo-toast][data-reduced-motion] *,
 [data-sileo-toast][data-reduced-motion] *::before,
 [data-sileo-toast][data-reduced-motion] *::after {
-  animation-duration: 0.01ms;
-  animation-iteration-count: 1;
-  transition-duration: 0.01ms;
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  animation-delay: 0s !important;
+  transition-duration: 0.01ms !important;
+  transition-delay: 0s !important;
 }
 
 /* notches and home indicators */
@@ -608,14 +614,18 @@ button[data-sileo-header]:focus-visible {
   color: rgba(0, 0, 0, 0.64);
 }
 
-[data-sileo-viewport][data-theme="dark"] [data-sileo-button][data-state] {
-  --sileo-btn-color: oklch(from var(--_c) calc(l - 0.07) c h);
+/* relative colours where the browser has them; elsewhere the buttons keep the state colour above */
+@supports (color: oklch(from red l c h)) {
+  [data-sileo-viewport][data-theme="dark"] [data-sileo-button][data-state] {
+    --sileo-btn-color: oklch(from var(--_c) calc(l - 0.07) c h);
+  }
+
+  [data-sileo-viewport][data-theme="light"] [data-sileo-button][data-state] {
+    --sileo-btn-color: oklch(from var(--_c) calc(l + 0.1) c h);
+  }
 }
 
 [data-sileo-viewport][data-theme="light"] {
   --sileo-state-loading: oklch(0.66 0 0);
 }
 
-[data-sileo-viewport][data-theme="light"] [data-sileo-button][data-state] {
-  --sileo-btn-color: oklch(from var(--_c) calc(l + 0.1) c h);
-}

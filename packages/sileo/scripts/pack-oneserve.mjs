@@ -5,18 +5,34 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const VERSION = "0.1.6-oneserve.1";
+const VERSION = "0.1.6-oneserve.2";
 const packageDir = join(dirname(fileURLToPath(import.meta.url)), "..");
 const source = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8"));
 if (!existsSync(join(packageDir, "dist", "index.mjs"))) throw new Error("dist missing: run bun run build first");
 
 const git = (...args) => execFileSync("git", args, { cwd: packageDir, encoding: "utf8" }).trim();
 const commit = git("rev-parse", "HEAD");
-const dirty = git("status", "--porcelain", "--", ".") !== "";
+const dirty = git("status", "--porcelain", "--", ".", "../../bun.lock") !== "";
+// the tools that shaped the archive, so a rebuild can use the same ones
+const tool = (command, args) => {
+  try {
+    return execFileSync(command, args, { cwd: packageDir, encoding: "utf8", shell: process.platform === "win32" }).trim();
+  } catch {
+    return "unknown";
+  }
+};
+const tools = {
+  node: process.version,
+  bun: tool("bun", ["--version"]),
+  npm: tool("npm", ["--version"]),
+  bunchee: createRequire(join(packageDir, "package.json"))("bunchee/package.json").version,
+  typescript: createRequire(join(packageDir, "package.json"))("typescript/package.json").version,
+};
 
 const stage = mkdtempSync(join(tmpdir(), "oneserve-sileo-"));
 try {
@@ -42,7 +58,7 @@ try {
   const result = JSON.parse(execFileSync("npm", ["pack", "--json", "--pack-destination", out], { cwd: stage, encoding: "utf8", shell: process.platform === "win32" }));
   const archive = join(out, result[0].filename);
   const sha256 = createHash("sha256").update(readFileSync(archive)).digest("hex");
-  const record = { name: manifest.name, version: VERSION, archive: result[0].filename, sha256, commit, workingTreeChanged: dirty, files: result[0].files.map((file) => file.path).sort() };
+  const record = { name: manifest.name, version: VERSION, archive: result[0].filename, sha256, commit, workingTreeChanged: dirty, tools, files: result[0].files.map((file) => file.path).sort() };
   writeFileSync(join(out, `${result[0].filename}.json`), `${JSON.stringify(record, null, 2)}\n`);
   console.log(`${result[0].filename} sha256=${sha256} commit=${commit}${dirty ? " (working tree changed)" : ""}`);
 } finally {

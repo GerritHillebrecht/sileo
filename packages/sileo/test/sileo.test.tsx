@@ -223,9 +223,11 @@ describe("lifetime and races", () => {
     ]);
   });
 
-  it("unmounting a Toaster ends only its own timers; the toasts stay, and StrictMode removes nothing", () => {
+  it("unmounting a Toaster ends only its own timers; the toasts stay, keep their time after a StrictMode remount, and are not read again", () => {
     const first = render(<Toaster />);
     show({ id: "stay", title: "Bleibt", duration: null });
+    show({ id: "timed", title: "Gespeichert", duration: 4000 });
+    advance(1000);
     first.unmount();
     render(
       <StrictMode>
@@ -233,8 +235,28 @@ describe("lifetime and races", () => {
       </StrictMode>,
     );
     advance(100);
-    expect(toastOf("stay")).not.toBeNull();
     expect(toastOf("stay")?.dataset.exiting).toBe("false");
+    expect(toastOf("timed")?.dataset.exiting).toBe("false");
+    // an old announcement is not read again by the new Toaster on its first update
+    expect(document.querySelector('[data-sileo-announcer][aria-live="polite"]')?.textContent).toBe("");
+    advance(4100);
+    expect(toastOf("timed")?.dataset.exiting).toBe("true");
+    expect(toastOf("stay")?.dataset.exiting).toBe("false");
+    expect(document.querySelector('[data-sileo-announcer][aria-live="polite"]')?.textContent).toBe("");
+  });
+
+  it("an update during the swap of a show() is not lost", () => {
+    render(<Toaster />);
+    // the card opened by itself and nobody works with it: a show() swaps (close, then change after 200 ms)
+    show({ id: "s", title: "Läuft", type: "info", description: "eins", duration: 6000 });
+    advance(500);
+    expect(toastOf("s")?.dataset.expanded).toBe("true");
+    show({ id: "s", title: "Fehler", type: "error", description: "zwei", duration: 6000 });
+    act(() => {
+      sileo.update("s", { description: "drei" });
+    });
+    advance(1000);
+    expect(toastOf("s")?.textContent).toContain("drei");
   });
 });
 
@@ -275,16 +297,96 @@ describe("controls", () => {
     expect(header.getAttribute("aria-expanded")).toBe("true");
     expect(content.hasAttribute("inert")).toBe(false);
     const buttons = Array.from(content.querySelectorAll<HTMLButtonElement>("[data-sileo-button]"));
-    expect(buttons.map((b) => [b.textContent, b.disabled, b.getAttribute("aria-busy")])).toEqual([
-      ["Annehmen", false, null],
-      ["Ablehnen", true, null],
-      ["Öffnen", true, "true"],
+    // disabled: not operable; busy: keeps a focus (aria-disabled) and is marked running
+    expect(buttons.map((b) => [b.textContent, b.disabled, b.getAttribute("aria-disabled"), b.getAttribute("aria-busy")])).toEqual([
+      ["Annehmen", false, null, null],
+      ["Ablehnen", true, null, null],
+      ["Öffnen", false, "true", "true"],
     ]);
     fireEvent.click(buttons[0]);
     expect(onClick).toHaveBeenCalledTimes(1);
     fireEvent.click(header);
     expect(header.getAttribute("aria-expanded")).toBe("false");
     expect(content.hasAttribute("inert")).toBe(true);
+  });
+
+  it("keeps the focus when the action holding it starts running and goes away; the time is not left paused", () => {
+    render(<Toaster />);
+    let run = () => {};
+    show({ id: "o", title: "Neue Bestellung", type: "action", description: "2× Rigatoni", duration: null, buttons: [{ title: "Annehmen", onClick: () => run() }] });
+    fireEvent.click(toastOf("o")!.querySelector<HTMLElement>("[data-sileo-header]")!);
+    const accept = screen.getByRole("button", { name: "Annehmen" });
+    act(() => accept.focus());
+    run = () => sileo.update("o", { buttons: [{ title: "Annehmen", busy: true, onClick: () => {} }] });
+    fireEvent.click(accept);
+    // running: still the focused button (aria-disabled, not disabled), a second click does nothing
+    const busy = screen.getByRole("button", { name: "Annehmen" });
+    expect(busy.getAttribute("aria-disabled")).toBe("true");
+    expect(document.activeElement).toBe(busy);
+    // the result replaces the toast without the button: the focus goes to the disclosure, not to the page
+    show({ id: "o", title: "Angenommen", type: "success", description: "18:30", duration: 4000 });
+    advance(600);
+    expect(document.activeElement).toBe(toastOf("o")!.querySelector("[data-sileo-header]"));
+    // and leaving the toast lets its time run out
+    act(() => (document.activeElement as HTMLElement).blur());
+    advance(4100);
+    expect(toastOf("o")?.dataset.exiting).toBe("true");
+  });
+
+  it("clear() while a toast holds the focus gives it back and leaves no pause behind", () => {
+    render(
+      <>
+        <button type="button">Ausgang</button>
+        <Toaster />
+      </>,
+    );
+    show({ id: "a", title: "A", description: "a", duration: null });
+    const origin = screen.getByRole("button", { name: "Ausgang" });
+    act(() => origin.focus());
+    const header = toastOf("a")!.querySelector<HTMLElement>("[data-sileo-header]")!;
+    fireEvent.focus(header, { relatedTarget: origin });
+    act(() => header.focus());
+    act(() => sileo.clear());
+    expect(document.activeElement).toBe(origin);
+    show({ id: "later", title: "Später", duration: 2000 });
+    advance(2100);
+    expect(toastOf("later")?.dataset.exiting).toBe("true");
+  });
+
+  it("a toast under the mouse stays open when a newer one arrives; a tap never pauses the time", () => {
+    render(<Toaster />);
+    show({ id: "h", title: "Fehler", type: "error", description: "Format", duration: null });
+    const toast = toastOf("h")!;
+    fireEvent.pointerOver(toast, { pointerType: "mouse" });
+    expect(toast.dataset.expanded).toBe("true");
+    show({ id: "n", title: "Neu", type: "info", description: "neu", duration: null });
+    advance(1000);
+    expect(toastOf("h")?.dataset.expanded).toBe("true");
+    fireEvent.pointerOut(toast, { pointerType: "mouse" });
+
+    show({ id: "t", title: "Gespeichert", duration: 2000 });
+    fireEvent.pointerOver(toastOf("t")!, { pointerType: "touch" });
+    advance(2100);
+    expect(toastOf("t")?.dataset.exiting).toBe("true");
+  });
+
+  it("hands the focus back to its origin when the next toast has no disclosure", () => {
+    render(
+      <>
+        <button type="button">Ausgang</button>
+        <Toaster />
+      </>,
+    );
+    show({ id: "plain", title: "Nur Titel", duration: null });
+    show({ id: "rich", title: "Mit Text", description: "x", dismissLabel: "Schließen", duration: null });
+    const origin = screen.getByRole("button", { name: "Ausgang" });
+    const header = toastOf("rich")!.querySelector<HTMLElement>("[data-sileo-header]")!;
+    fireEvent.click(header);
+    const close = screen.getByRole("button", { name: "Schließen" });
+    fireEvent.focus(close, { relatedTarget: origin });
+    act(() => close.focus());
+    fireEvent.click(close);
+    expect(document.activeElement).toBe(origin);
   });
 
   it("Escape closes the card from inside only, and not a key someone else handled", () => {

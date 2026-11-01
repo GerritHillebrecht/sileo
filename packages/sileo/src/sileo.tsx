@@ -2,7 +2,7 @@ import { motion, useReducedMotion, useReducedMotionConfig } from "motion/react";
 import {
   type CSSProperties,
   type KeyboardEvent,
-  type MouseEventHandler,
+  type PointerEventHandler,
   memo,
   type ReactNode,
   type TransitionEventHandler,
@@ -64,10 +64,12 @@ interface SileoProps {
   canExpand?: boolean;
   interruptKey?: string;
   refreshKey?: string;
-  onMouseEnter?: MouseEventHandler<HTMLElement>;
-  onMouseLeave?: MouseEventHandler<HTMLElement>;
+  onPointerEnter?: PointerEventHandler<HTMLElement>;
+  onPointerLeave?: PointerEventHandler<HTMLElement>;
+  /* the Toaster's view: the focus or a mouse pointer is on this toast */
+  inUse?: boolean;
   onDismiss?: () => void;
-  /* the toast leaves while it holds the focus: the Toaster moves it on */
+  /* the toast lost the control holding the focus (it leaves, or the control went): the Toaster moves the focus on */
   onFocusLeave?: (id: string) => void;
 }
 
@@ -145,8 +147,9 @@ export const Sileo = memo(function Sileo({
   canExpand,
   interruptKey,
   refreshKey,
-  onMouseEnter,
-  onMouseLeave,
+  onPointerEnter,
+  onPointerLeave,
+  inUse = false,
   onDismiss,
   onFocusLeave,
 }: SileoProps) {
@@ -169,7 +172,7 @@ export const Sileo = memo(function Sileo({
   const [hovered, setHovered] = useState(false);
   const [focusInside, setFocusInside] = useState(false);
   const [userOpen, setUserOpen] = useState<boolean | null>(null);
-  const interacting = hovered || focusInside;
+  const interacting = hovered || focusInside || inUse;
   const actions = useMemo(
     () => [...(view.button ? [view.button] : []), ...(view.buttons ?? [])],
     [view.button, view.buttons],
@@ -335,7 +338,8 @@ export const Sileo = memo(function Sileo({
 
     /* the same instance changed (sileo.update): take the content as it is, no collapse, no swap */
     if (lastRefreshKeyRef.current === refreshKey) {
-      if (!pendingRef.current) setView((prev) => (prev === next ? prev : next));
+      if (pendingRef.current) pendingRef.current.payload = next;
+      else setView((prev) => (prev === next ? prev : next));
       return;
     }
     lastRefreshKeyRef.current = refreshKey;
@@ -374,11 +378,14 @@ export const Sileo = memo(function Sileo({
     if (autoCollapseRef.current) clearTimeout(autoCollapseRef.current);
 
     if (exiting || !allowExpand) {
-      setIsExpanded(false);
+      if (exiting || !interactingRef.current) setIsExpanded(false);
       return;
     }
 
     if (autoExpandDelayMs == null && autoCollapseDelayMs == null) return;
+    /* once per instance: becoming the active toast again (another one hovered and left) does not open it anew */
+    if (autoOpenedForRef.current === applied) return;
+    autoOpenedForRef.current = applied;
 
     const expandDelay = autoExpandDelayMs ?? 0;
     const collapseDelay = autoCollapseDelayMs ?? 0;
@@ -403,6 +410,7 @@ export const Sileo = memo(function Sileo({
 
   const interactingRef = useRef(interacting);
   interactingRef.current = interacting;
+  const autoOpenedForRef = useRef<string | undefined | null>(null);
 
   /* the disclosure's explicit choice lasts while the toast is in use */
   useEffect(() => {
@@ -475,22 +483,25 @@ export const Sileo = memo(function Sileo({
 
   /* -------------------------------- Handlers -------------------------------- */
 
-  const handleEnter: MouseEventHandler<HTMLElement> = useCallback(
+  /* hover is a mouse thing: a tap opens the card through the disclosure, not through a pointer that never leaves */
+  const handleEnter: PointerEventHandler<HTMLElement> = useCallback(
     (e) => {
-      onMouseEnter?.(e);
+      onPointerEnter?.(e);
+      if (e.pointerType !== "mouse") return;
       setHovered(true);
       if (hasDesc) setIsExpanded(true);
     },
-    [hasDesc, onMouseEnter],
+    [hasDesc, onPointerEnter],
   );
 
-  const handleLeave: MouseEventHandler<HTMLElement> = useCallback(
+  const handleLeave: PointerEventHandler<HTMLElement> = useCallback(
     (e) => {
-      onMouseLeave?.(e);
+      onPointerLeave?.(e);
+      if (e.pointerType !== "mouse") return;
       setHovered(false);
       setIsExpanded(false);
     },
-    [onMouseLeave],
+    [onPointerLeave],
   );
 
   const handleTransitionEnd: TransitionEventHandler<HTMLElement> = useCallback(
@@ -597,6 +608,19 @@ export const Sileo = memo(function Sileo({
     [exiting, onDismiss],
   );
 
+  /* the control holding the focus went away (removed by an update, the card closed into inert, the disclosure became a
+     plain header): the focus goes to the disclosure when there is one, else the Toaster moves it on */
+  useLayoutEffect(() => {
+    if (!focusInside || exiting) return;
+    const root = buttonRef.current;
+    const active = document.activeElement;
+    if (root && active instanceof Node && root.contains(active) && !(active as HTMLElement).closest("[inert]")) return;
+    const header = headerRef.current;
+    if (header instanceof HTMLButtonElement && header.isConnected) header.focus();
+    else onFocusLeave?.(id);
+    if (!(root && document.activeElement instanceof Node && root.contains(document.activeElement))) setFocusInside(false);
+  }, [view, open, hasDesc, exiting, focusInside, id, onFocusLeave]);
+
   /* a toast that leaves while it holds the focus hands it on before it becomes inert */
   useLayoutEffect(() => {
     if (!exiting) return;
@@ -679,8 +703,8 @@ export const Sileo = memo(function Sileo({
       inert={exiting || undefined}
       className={className}
       style={rootStyle}
-      onMouseEnter={handleEnter}
-      onMouseLeave={handleLeave}
+      onPointerEnter={handleEnter}
+      onPointerLeave={handleLeave}
       onFocus={() => setFocusInside(true)}
       onBlur={(e) => {
         if (e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) return;
@@ -760,11 +784,13 @@ export const Sileo = memo(function Sileo({
                     data-sileo-button
                     data-state={view.state}
                     className={view.styles?.button}
-                    disabled={action.disabled || action.busy}
+                    disabled={action.disabled}
+                    aria-disabled={action.busy || undefined}
                     aria-busy={action.busy || undefined}
                     onClick={(e) => {
                       e.stopPropagation();
-                      action.onClick();
+                      /* a running action keeps the focus (aria-disabled, not disabled) but does nothing again */
+                      if (!action.busy) action.onClick();
                     }}
                   >
                     {action.title}
@@ -783,7 +809,10 @@ export const Sileo = memo(function Sileo({
                 onDismiss();
               }}
             >
-              <X />
+              <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M18 6 6 18" />
+                <path d="m6 6 12 12" />
+              </svg>
             </button>
           ) : null}
         </div>

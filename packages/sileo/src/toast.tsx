@@ -1,7 +1,7 @@
 import {
   type CSSProperties,
   type FocusEvent,
-  type MouseEventHandler,
+  type PointerEventHandler,
   type ReactNode,
   useCallback,
   useEffect,
@@ -200,8 +200,9 @@ const replaceToast = (id: string, options: InternalSileoOptions) => {
 const updateToast = (id: string, patch: SileoOptions) => {
   const existing = liveItem(id);
   if (!existing) return false;
-  const { type, ...rest } = patch;
-  const restarts = Object.prototype.hasOwnProperty.call(patch, "duration");
+  /* the place stays: a toast moved to another viewport would enter anew (and lose a focus it holds) */
+  const { type, position: _position, ...rest } = patch;
+  const restarts = patch.duration !== undefined;
   const item: SileoItem = {
     ...existing,
     ...rest,
@@ -314,10 +315,19 @@ function useResolvedTheme(theme: "light" | "dark" | "system" | undefined): "ligh
   return resolved;
 }
 
-/* true when focusing `el` would leave an open modal dialog that does not contain the toasts */
-const outsideOpenModal = (el: HTMLElement) => {
-  const modal = document.querySelector<HTMLElement>('[aria-modal="true"]');
-  return modal !== null && !modal.contains(el);
+/* an open modal: one that declares itself, an open Radix dialog (it sets no aria-modal) or a native modal dialog – visible only */
+const openModals = () =>
+  Array.from(
+    document.querySelectorAll<HTMLElement>(
+      '[aria-modal="true"], [role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"], dialog:modal',
+    ),
+  ).filter((el) => el.getClientRects().length > 0);
+
+/* a target the focus may go to: present, operable, not hidden from assistive technology, and not out of an open modal */
+const focusable = (el: HTMLElement | null | undefined): el is HTMLElement => {
+  if (!el || !el.isConnected || el.matches(":disabled")) return false;
+  if (el.closest('[inert], [aria-hidden="true"]')) return false;
+  return openModals().every((modal) => modal.contains(el));
 };
 
 export function Toaster({
@@ -333,9 +343,15 @@ export function Toaster({
 }: SileoToasterProps) {
   const resolvedTheme = useResolvedTheme(theme);
   const [toasts, setToasts] = useState<SileoItem[]>(store.toasts);
+  /* only announcements made after this Toaster mounted: a remount never reads an old one again */
+  const mountedSeq = useRef(store.announcement?.seq ?? 0);
   const [announcement, setAnnouncement] = useState<Announcement | null>(null);
   const [activeId, setActiveId] = useState<string>();
-  const [interactingId, setInteractingId] = useState<string>();
+  /* the toast holding the focus and the one under a mouse pointer – both stay shown, active and open */
+  const [focusedId, setFocusedId] = useState<string>();
+  const [hoveredId, setHoveredId] = useState<string>();
+  const heldRef = useRef<{ focused?: string; hovered?: string }>({});
+  heldRef.current = { focused: focusedId, hovered: hoveredId };
   const [showAll, setShowAll] = useState<ReadonlySet<SileoPosition>>(new Set());
 
   const pausedByPointer = useRef(false);
@@ -350,8 +366,8 @@ export function Toaster({
     new Map<
       string,
       {
-        enter: MouseEventHandler<HTMLElement>;
-        leave: MouseEventHandler<HTMLElement>;
+        enter: PointerEventHandler<HTMLElement>;
+        leave: PointerEventHandler<HTMLElement>;
         dismiss: () => void;
       }
     >(),
@@ -400,7 +416,8 @@ export function Toaster({
   useEffect(() => {
     const listener: SileoListener = () => {
       setToasts(store.toasts);
-      setAnnouncement(store.announcement);
+      const next = store.announcement;
+      if (next && next.seq > mountedSeq.current) setAnnouncement(next);
     };
     store.listeners.add(listener);
     /*
@@ -425,10 +442,25 @@ export function Toaster({
     };
   }, []);
 
+  /* the focus went to the page because the control holding it was removed (clear(), a toast pushed out): it goes on to
+     the next toast or back to where it came from, and the time no longer waits for a focus that is gone */
+  const focusLost = useCallback(() => {
+    if (!pausedByFocus.current) return;
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && active.closest("[data-sileo-viewport]")) return;
+    if (active === null || active === document.body) handleFocusLeaveRef.current?.(undefined);
+    const now = document.activeElement;
+    if (now instanceof HTMLElement && now.closest("[data-sileo-viewport]")) return;
+    pausedByFocus.current = false;
+    setFocusedId(undefined);
+    schedule(listRef.current);
+  }, [schedule]);
+
   useEffect(() => {
     listRef.current = toasts;
 
     const toastKeys = new Set(toasts.map(timeoutKey));
+    const liveIds = new Set(toasts.filter((t) => !t.exiting).map((t) => t.id));
     const toastIds = new Set(toasts.map((t) => t.id));
     for (const [key, timer] of timersRef.current) {
       if (!toastKeys.has(key)) {
@@ -442,24 +474,15 @@ export function Toaster({
     for (const id of handlersCache.current.keys()) {
       if (!toastIds.has(id)) handlersCache.current.delete(id);
     }
+    /* the toast under the pointer left without a pointerleave (closed, swiped, cleared): the pointer no longer holds the time */
+    if (hoveredId !== undefined && !liveIds.has(hoveredId)) {
+      setHoveredId(undefined);
+      pausedByPointer.current = false;
+    }
 
+    focusLost();
     schedule(toasts);
-  }, [toasts, schedule]);
-
-  const handleMouseEnterRef = useRef<MouseEventHandler<HTMLElement>>(null);
-  const handleMouseLeaveRef = useRef<MouseEventHandler<HTMLElement>>(null);
-
-  handleMouseEnterRef.current = useCallback<MouseEventHandler<HTMLElement>>(() => {
-    if (pausedByPointer.current) return;
-    pausedByPointer.current = true;
-    pauseAll();
-  }, [pauseAll]);
-
-  handleMouseLeaveRef.current = useCallback<MouseEventHandler<HTMLElement>>(() => {
-    if (!pausedByPointer.current) return;
-    pausedByPointer.current = false;
-    schedule(listRef.current);
-  }, [schedule]);
+  }, [toasts, schedule, hoveredId, focusLost]);
 
   const latest = useMemo(() => {
     for (let i = toasts.length - 1; i >= 0; i--) {
@@ -468,40 +491,56 @@ export function Toaster({
     return undefined;
   }, [toasts]);
 
+  /* the newest toast is the active one – unless one is in use, which a newcomer never closes */
   useEffect(() => {
     latestRef.current = latest;
-    setActiveId(latest);
+    setActiveId(heldRef.current.focused ?? heldRef.current.hovered ?? latest);
   }, [latest]);
 
-  const getHandlers = useCallback((toastId: string) => {
-    let cached = handlersCache.current.get(toastId);
-    if (cached) return cached;
+  const getHandlers = useCallback(
+    (toastId: string) => {
+      let cached = handlersCache.current.get(toastId);
+      if (cached) return cached;
 
-    cached = {
-      enter: ((e) => {
-        setActiveId((prev) => (prev === toastId ? prev : toastId));
-        setInteractingId(toastId);
-        handleMouseEnterRef.current?.(e);
-      }) as MouseEventHandler<HTMLElement>,
-      leave: ((e) => {
-        setActiveId((prev) => (prev === latestRef.current ? prev : latestRef.current));
-        setInteractingId((prev) => (prev === toastId ? undefined : prev));
-        handleMouseLeaveRef.current?.(e);
-      }) as MouseEventHandler<HTMLElement>,
-      dismiss: () => dismissToast(toastId, "user"),
-    };
+      cached = {
+        /* a mouse pointer only: a tap fires pointerenter too, but has no "leave" to end the pause reliably */
+        enter: ((e) => {
+          if (e.pointerType !== "mouse") return;
+          setActiveId(toastId);
+          setHoveredId(toastId);
+          if (!pausedByPointer.current) {
+            pausedByPointer.current = true;
+            pauseAll();
+          }
+        }) as PointerEventHandler<HTMLElement>,
+        leave: ((e) => {
+          if (e.pointerType !== "mouse") return;
+          setHoveredId((prev) => (prev === toastId ? undefined : prev));
+          setActiveId(heldRef.current.focused ?? latestRef.current);
+          if (pausedByPointer.current) {
+            pausedByPointer.current = false;
+            schedule(listRef.current);
+          }
+        }) as PointerEventHandler<HTMLElement>,
+        dismiss: () => dismissToast(toastId, "user"),
+      };
 
-    handlersCache.current.set(toastId, cached);
-    return cached;
-  }, []);
+      handlersCache.current.set(toastId, cached);
+      return cached;
+    },
+    [pauseAll, schedule],
+  );
 
-  /* keyboard: focus inside a toast pauses the time like the pointer does, and keeps that toast shown */
+  /* keyboard: focus inside a toast pauses the time like the pointer does, and keeps that toast shown and active */
   const handleFocus = useCallback(
     (e: FocusEvent<HTMLElement>) => {
       const from = e.relatedTarget;
       if (from instanceof HTMLElement && !from.closest("[data-sileo-viewport]")) originRef.current = from;
       const toast = (e.target as HTMLElement).closest<HTMLElement>("[data-sileo-toast]");
-      if (toast?.dataset.id) setInteractingId(toast.dataset.id);
+      if (toast?.dataset.id) {
+        setFocusedId(toast.dataset.id);
+        setActiveId(toast.dataset.id);
+      }
       if (!pausedByFocus.current) {
         pausedByFocus.current = true;
         pauseAll();
@@ -513,35 +552,28 @@ export function Toaster({
     (e: FocusEvent<HTMLElement>) => {
       const to = e.relatedTarget;
       if (to instanceof HTMLElement && to.closest("[data-sileo-viewport]")) return;
-      setInteractingId(undefined);
+      setFocusedId(undefined);
       pausedByFocus.current = false;
       schedule(listRef.current);
     },
     [schedule],
   );
 
-  /* a leaving toast that holds the focus hands it to the next toast, else back to where it came from – never out of a modal */
-  const handleFocusLeave = useCallback((leavingId: string) => {
+  /* a toast that loses the control holding the focus hands it to the next toast's disclosure, else back to where it came
+     from – only to a target that can take it, never out of an open modal; checked after the attempt */
+  const handleFocusLeave = useCallback((leavingId: string | undefined) => {
     const next = Array.from(
       document.querySelectorAll<HTMLElement>(
-        '[data-sileo-toast]:not([data-exiting="true"]) [data-sileo-header]',
+        '[data-sileo-toast]:not([data-exiting="true"]) button[data-sileo-header]',
       ),
-    ).find((el) => el.closest<HTMLElement>("[data-sileo-toast]")?.dataset.id !== leavingId);
-    if (next && !outsideOpenModal(next)) {
-      next.focus();
-      return;
-    }
+    ).find((el) => el.closest<HTMLElement>("[data-sileo-toast]")?.dataset.id !== leavingId && focusable(el));
+    next?.focus();
+    if (next && document.activeElement === next) return;
     const origin = originRef.current;
-    if (
-      origin &&
-      origin.isConnected &&
-      !origin.closest("[inert]") &&
-      !origin.matches(":disabled") &&
-      !outsideOpenModal(origin)
-    ) {
-      origin.focus();
-    }
+    if (focusable(origin)) origin.focus();
   }, []);
+  const handleFocusLeaveRef = useRef(handleFocusLeave);
+  handleFocusLeaveRef.current = handleFocusLeave;
 
   const getViewportStyle = useCallback(
     (pos: SileoPosition): CSSProperties | undefined => {
@@ -582,12 +614,13 @@ export function Toaster({
   /* at most visibleToasts per position (the newest), plus the one someone works with; the rest behind "more" */
   const shownOf = (pos: SileoPosition, items: SileoItem[]) => {
     const live = items.filter((t) => !t.exiting);
-    if (visibleToasts === undefined || showAll.has(pos) || live.length <= visibleToasts) {
+    if (visibleToasts === undefined || visibleToasts <= 0 || showAll.has(pos) || live.length <= visibleToasts) {
       return { shown: items, hidden: 0 };
     }
     let kept = live.slice(-visibleToasts);
-    const held = live.find((t) => t.id === interactingId);
-    if (held && !kept.includes(held)) kept = [held, ...kept.slice(1)];
+    /* the toasts in use stay; the oldest of the newest give way to them */
+    const held = live.filter((t) => (t.id === focusedId || t.id === hoveredId) && !kept.includes(t));
+    if (held.length > 0) kept = [...held, ...kept.slice(held.length)];
     const keep = new Set(kept);
     return {
       shown: items.filter((t) => t.exiting || keep.has(t)),
@@ -597,7 +630,7 @@ export function Toaster({
 
   /* polite or assertive; the same text again is still read (alternating invisible mark) */
   const announced = announcement
-    ? `${announcement.text}${announcement.seq % 2 ? "" : "​"}`
+    ? `${announcement.text}${announcement.seq % 2 ? "" : "\u200b"}`
     : "";
   const fill = theme ? THEME_FILLS[resolvedTheme] : undefined;
 
@@ -652,8 +685,9 @@ export function Toaster({
                   autoCollapseDelayMs={item.autoCollapseDelayMs}
                   refreshKey={item.instanceId}
                   canExpand={activeId === undefined || activeId === item.id}
-                  onMouseEnter={h.enter}
-                  onMouseLeave={h.leave}
+                  onPointerEnter={h.enter}
+                  onPointerLeave={h.leave}
+                  inUse={item.id === focusedId || item.id === hoveredId}
                   onDismiss={h.dismiss}
                   onFocusLeave={handleFocusLeave}
                 />
