@@ -59,7 +59,10 @@ Additions and changes, with their reasons:
   one (0.1.6 never opened it), so an error or a waiting decision is seen; `autopilot: false` turns it off.
 - **Stack:** `visibleToasts` limits the toasts per position (the one in use stays shown), the rest behind a "more"
   button (`moreLabel`, `lessLabel`); `label` names the region. Safe-area padding at the screen edges.
-- **Looks:** shapes, filter, colours, type and timing are the original; added controls use the original button style.
+- **Contrast:** with an explicit theme the original colours miss 4.5:1 (light toast: every text 2.0–3.9; dark toast:
+  the buttons 4.0). Per theme only the colour values change (darker state colours and description on the light toast,
+  lighter button text on the dark one); measured over the SVG fill.
+- **Looks:** shapes, filter, type and timing are the original, colours apart from the contrast change above; added controls use the original button style.
   The focus ring uses `--sileo-focus-ring` (default: the action colour). Touch targets grow on coarse pointers.
 
 Tests: `bun run test` (vitest, happy-dom). Motion, focus rings and the filter are checked in a real browser by OneServe.
