@@ -527,7 +527,7 @@ export const Sileo = memo(function Sileo({
       if (!(e.target instanceof Node) || !e.currentTarget.contains(e.target)) return;
       e.preventDefault();
       /* the card becomes inert: a focus inside it goes to the disclosure first */
-      if (contentRef.current?.contains(document.activeElement)) headerRef.current?.focus();
+      if (cardRef.current?.contains(document.activeElement)) headerRef.current?.focus();
       setUserOpen(false);
       setIsExpanded(false);
     },
@@ -541,6 +541,8 @@ export const Sileo = memo(function Sileo({
   /* movement before the pointer is captured, so a tap on the disclosure stays a click */
   const SWIPE_CAPTURE = 4;
   const buttonRef = useRef<HTMLDivElement>(null);
+  /* the card (description, actions, close button): inert while closed */
+  const cardRef = useRef<HTMLDivElement>(null);
   const pointerStartRef = useRef<number | null>(null);
   const onDismissRef = useRef(onDismiss);
   onDismissRef.current = onDismiss;
@@ -738,6 +740,7 @@ export const Sileo = memo(function Sileo({
 
       {hasDesc && (
         <div
+          ref={cardRef}
           id={contentId}
           data-sileo-content
           data-edge={expand}

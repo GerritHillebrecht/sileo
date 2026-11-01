@@ -500,6 +500,11 @@ button[data-sileo-header]:focus-visible {
   margin-top: 0;
 }
 
+/* one action spans the card, as the original's single button did */
+[data-sileo-actions] [data-sileo-button]:only-child {
+  flex: 1;
+}
+
 [data-sileo-button]:disabled {
   opacity: 0.5;
   cursor: not-allowed;

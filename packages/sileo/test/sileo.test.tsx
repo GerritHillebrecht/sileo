@@ -305,6 +305,18 @@ describe("controls", () => {
     expect(document.activeElement).toBe(header);
   });
 
+  it("Escape from the close button also hands the focus to the disclosure, never into the inert card", () => {
+    render(<Toaster />);
+    show({ id: "c", title: "Hinweis", type: "info", description: "Text", dismissLabel: "Schließen", duration: null });
+    const header = toastOf("c")!.querySelector<HTMLElement>("[data-sileo-header]")!;
+    fireEvent.click(header);
+    const close = screen.getByRole("button", { name: "Schließen" });
+    act(() => close.focus());
+    fireEvent.keyDown(close, { key: "Escape" });
+    expect(header.getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(header);
+  });
+
   it("shows at most visibleToasts and keeps the rest reachable", () => {
     render(<Toaster visibleToasts={3} moreLabel={(n) => `${n} weitere`} lessLabel="Weniger" />);
     for (const id of ["a", "b", "c", "d", "e"]) show({ id, title: id, duration: null });
