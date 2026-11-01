@@ -593,7 +593,7 @@ button[data-sileo-header]:focus-visible {
 }
 
 /* Contrast (WCAG 1.4.3, 4.5:1): with an explicit theme the original colours fall short – on the light toast (dark theme)
-   every text (2.0–3.9), on the dark toast (light theme) the buttons (4.0). Only the colour values change, per theme;
+   every text (2.0–3.9), on the dark toast (light theme) the buttons (4.0) and the loading title (3.7). Only the colour values change, per theme;
    shapes, layout and motion stay. Measured over the SVG fill (axe cannot see that background). */
 [data-sileo-viewport][data-theme="dark"] {
   --sileo-state-success: oklch(0.5 0.17 142.136);
@@ -610,6 +610,10 @@ button[data-sileo-header]:focus-visible {
 
 [data-sileo-viewport][data-theme="dark"] [data-sileo-button][data-state] {
   --sileo-btn-color: oklch(from var(--_c) calc(l - 0.07) c h);
+}
+
+[data-sileo-viewport][data-theme="light"] {
+  --sileo-state-loading: oklch(0.66 0 0);
 }
 
 [data-sileo-viewport][data-theme="light"] [data-sileo-button][data-state] {
